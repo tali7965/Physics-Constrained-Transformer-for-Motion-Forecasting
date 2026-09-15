@@ -1,0 +1,9 @@
+# Root for raw and preprocessed Argoverse 2 data.
+# Override without editing this file:  export AV2_DATA_ROOT=/Volumes/<ssd>/av2
+data_root: data
+
+raw_subdir: raw
+processed_subdir: processed
+
+# Preprocessing parameters (neighbour count, map radius, polyline sampling) are
+# added in Step 5, once the real data format has been measured.

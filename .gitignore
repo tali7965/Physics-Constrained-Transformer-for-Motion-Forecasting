@@ -1,0 +1,15 @@
+# Environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# Data and generated artifacts
+data/
+outputs/
+*.npz
+*.pt
+*.parquet
+
+# OS / editor / tooling
+.DS_Store
+.claude/settings.local.json
