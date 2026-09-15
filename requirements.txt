@@ -1,8 +1,10 @@
-# Pinned from the resolved environment in Step 1.
-av2
-matplotlib
-numpy
-pandas
-pyyaml
-torch
-tqdm
+# Python 3.12 (av2 publishes macOS arm64 wheels for CPython 3.9-3.12 only).
+# Direct dependencies pinned to the versions resolved on 2026-09-16; transitive
+# dependencies are left to the resolver.
+av2==0.3.6
+matplotlib==3.11.2
+numpy==2.5.3
+pandas==3.0.5
+PyYAML==6.0.3
+torch==2.14.0
+tqdm==4.70.1
