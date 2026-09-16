@@ -1,6 +1,6 @@
-# Root for raw and preprocessed Argoverse 2 data.
-# Override without editing this file:  export AV2_DATA_ROOT=/Volumes/<ssd>/av2
-data_root: data
+# Root for raw and preprocessed Argoverse 2 data (external SSD).
+# Override without editing this file:  export AV2_DATA_ROOT=/some/other/path
+data_root: /Volumes/Lenovo PS8/VISION_DATASET
 
 raw_subdir: raw
 processed_subdir: processed

@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ## Layout
 
-```
+```text
 configs/preprocess.yaml   data paths and preprocessing parameters
 src/config.py             config loading, data_root resolution
 src/download.py           fetch scenarios from the public Argoverse S3 bucket
@@ -41,11 +41,37 @@ data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```
 
-The dataset does not live in the repo. `data_root` defaults to `data/`; point it elsewhere with:
+The dataset does not live in the repo. `data_root` in `configs/preprocess.yaml` points at the
+external SSD; override it without editing the config:
 
 ```bash
-export AV2_DATA_ROOT=/Volumes/<ssd>/av2
+export AV2_DATA_ROOT=/some/other/path
 ```
+
+## Downloading the data
+
+Argoverse 2 motion forecasting is a public S3 bucket (no account needed). Measured sizes:
+
+| Split | Scenarios | Size |
+| --- | --- | --- |
+| train | 199,908 | 47.0 GB |
+| val | 24,988 | 5.9 GB |
+| test | 24,984 | 4.1 GB |
+
+```bash
+brew install s5cmd
+source .venv/bin/activate
+
+python src/download.py --split val --limit 100      # quick sanity check (~25 MB)
+python src/download.py --split val                  # full val, for evaluation
+python src/download.py --split test                 # full test, for the leaderboard
+python src/download.py --split train --limit 20000  # training subset (~4.8 GB)
+```
+
+Scenarios land in `<data_root>/raw/<split>/<scenario-id>/`. The script is resumable: re-running
+skips anything already complete and verifies every scenario on disk before reporting `OK`. Without
+`--limit` a whole split is fetched. The first run for each split lists the bucket and caches the
+scenario ids under `<data_root>/raw/manifests/` (train takes a few minutes to list).
 
 ## Data
 
