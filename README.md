@@ -75,8 +75,31 @@ scenario ids under `<data_root>/raw/manifests/` (train takes a few minutes to li
 
 ## Data
 
-_Measured scenario format is recorded here in Step 4 (timesteps, sampling rate, observed/future
-split, object types, map elements)._
+Measured over the full validation split (24,988 scenarios) with `python src/explore.py --split val`;
+the complete report is written to `outputs/explore_val.txt`.
+
+**Timeline** — every scenario has 110 timesteps at 0.1 s (10 Hz): 50 observed (5 s history) and
+60 future (6 s horizon). No exceptions in the split.
+
+**Agents** — 2–255 tracks per scenario (median 52). Object types over all tracks: 73.5% VEHICLE,
+9.5% PEDESTRIAN, 7.0% STATIC, 4.8% BACKGROUND, then CONSTRUCTION, RIDERLESS_BICYCLE, BUS, CYCLIST,
+MOTORCYCLIST, UNKNOWN (each < 2%). Track categories: 81.1% TRACK_FRAGMENT, 11.9% UNSCORED_TRACK,
+5.2% SCORED_TRACK, 1.8% FOCAL_TRACK (one per scenario). Every FOCAL, SCORED and UNSCORED track
+spans all 110 steps; every TRACK_FRAGMENT is partial.
+
+**Focal track** — 88.6% VEHICLE, 6.3% PEDESTRIAN, 3.4% BUS, 1.2% CYCLIST, 0.5% MOTORCYCLIST.
+Speed over all focal timesteps: p50 5.95 m/s, p95 14.86 m/s, max 29.56 m/s (p5 is 0 — stationary
+agents are common).
+
+**Map** — 2–281 lane segments per scenario (median 62); 87.7% VEHICLE, 11.4% BIKE, 0.9% BUS lanes;
+34% of segments are in an intersection. Raw lane boundaries have 2–59 points (median 3); the
+`av2` API returns a fixed 10-point centerline per segment. Median 4 pedestrian crossings and 3
+drivable-area polygons per scenario.
+
+**Cities** — miami 26.6%, pittsburgh 21.3%, austin 21.3%, washington-dc 12.8%, dearborn 12.3%,
+palo-alto 5.7%.
+
+**Load cost** — 18 ms per scenario (parquet + map JSON), ~9 min wall time for the whole val split.
 
 ## Results
 
