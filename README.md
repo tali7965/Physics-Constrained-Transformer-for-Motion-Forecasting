@@ -15,7 +15,8 @@ Full scope and timeline: [`VISION_PROJECT_SCOPE.md`](VISION_PROJECT_SCOPE.md).
 ## Status
 
 Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
-Phase 2 (baselines) is next. No model code yet.
+Phase 2 (Baselines) — complete: metrics, constant-velocity and LSTM baselines (see Results).
+Phase 3 (Transformer model) is next.
 
 ## Setup
 
@@ -33,11 +34,17 @@ pip install -r requirements.txt
 
 ```text
 configs/preprocess.yaml   data paths and preprocessing parameters
+configs/lstm.yaml         train/dev protocol and LSTM baseline hyperparameters
 src/config.py             config loading, data_root resolution
 src/download.py           fetch scenarios from the public Argoverse S3 bucket
 src/explore.py            measure and report the raw scenario format
 src/preprocess.py         raw scenarios -> agent-centric tensors
 src/visualize.py          scene plots, and visual validation of the frame transform
+src/data.py               train/dev row selection, in-memory loading of focal-agent data
+src/metrics.py            minADE, minFDE, miss rate, brier-minFDE (Argoverse 2 definitions)
+src/models.py             constant-velocity baseline and LSTM encoder-decoder
+src/train.py              training loop with dev-set model selection
+src/evaluate.py           score a model on val (or dev) and write outputs/results/
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```
@@ -157,4 +164,38 @@ the preprocessing casts it and asserts nothing is lost.
 
 ## Results
 
-_Baseline and model results tables land here in Phase 2 onward._
+**Protocol** — a seeded permutation of the train split gives a fixed *dev* set of 5,000 scenarios,
+used only for model selection, and a fixed *training subset* of 50,000 scenarios. The 10% and 25%
+subsets for the data-efficiency study are prefixes of it, so they are nested. The official val split
+(24,988 scenarios) is used only for the numbers reported here. All settings live in
+`configs/lstm.yaml`.
+
+**Metrics** — the Argoverse 2 definitions: of the K most probable modes, the best is the one with the
+lowest endpoint error; minADE and minFDE are its average and final errors; a miss is a minFDE over
+2 m; brier-minFDE adds (1 − p_best)² and ranks the leaderboard at K=6. `src/metrics.py` matches the
+`av2` package's per-scenario functions exactly.
+
+**Baselines on val, K=1** (both baselines predict a single trajectory):
+
+| Model | Population | minADE | minFDE | MR |
+| --- | --- | --- | --- | --- |
+| Constant velocity, tracker velocity | all focal (24,988) | 4.70 | 12.15 | 0.863 |
+| Constant velocity, last-step displacement | all focal | 4.40 | 11.66 | 0.855 |
+| LSTM encoder–decoder | all focal | **3.15** | **8.33** | **0.821** |
+| Constant velocity, tracker velocity | vehicle-like (23,113) | 5.00 | 12.96 | 0.905 |
+| Constant velocity, last-step displacement | vehicle-like | 4.69 | 12.43 | 0.899 |
+| LSTM encoder–decoder | vehicle-like | **3.31** | **8.78** | **0.856** |
+
+Vehicle-like means VEHICLE, BUS and MOTORCYCLIST focal agents, the population the Argoverse 2 paper
+uses for its baselines. Its focal-history-only LSTM (Table 5, beta dataset) reports 3.05 / 8.28 /
+0.85, close to ours. The LSTM (270k parameters) uses only the focal agent's history: a 2-layer
+encoder and an autoregressive decoder over 60 steps, trained with an ADE loss for 30 epochs, about
+5 minutes on the M4 GPU. Training and dev error end almost equal (3.12 vs 3.15 m), so it underfits
+rather than overfits.
+
+```bash
+python src/evaluate.py --model cv-tracker
+python src/evaluate.py --model cv-displacement
+python src/train.py --config configs/lstm.yaml
+python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt
+```
