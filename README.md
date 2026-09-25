@@ -14,7 +14,8 @@ Full scope and timeline: [`VISION_PROJECT_SCOPE.md`](VISION_PROJECT_SCOPE.md).
 
 ## Status
 
-Phase 1 (Setup & Data) — in progress. No model code yet.
+Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
+Phase 2 (baselines) is next. No model code yet.
 
 ## Setup
 
@@ -100,6 +101,59 @@ drivable-area polygons per scenario.
 palo-alto 5.7%.
 
 **Load cost** — 18 ms per scenario (parquet + map JSON), ~9 min wall time for the whole val split.
+
+## Preprocessing
+
+```bash
+python src/preprocess.py --split val --limit 200 --workers 1   # quick check
+python src/preprocess.py --split val                           # whole split, 8 workers
+python src/preprocess.py --split test
+python src/preprocess.py --split train
+python src/visualize.py --split val --random 6 --seed 0        # figures + round-trip check
+```
+
+Each scenario becomes fixed-shape arrays in a frame centred on the focal agent at the last observed
+step (t=49), with the x-axis along its recorded heading. The recorded heading is within 4° of the
+velocity direction for 99% of moving focal agents, so it is a safe axis.
+
+**Region and caps** — agents present at t=49 and lane segments with any centerline point within
+150 m of the focal agent, nearest first, up to 64 agents (focal in slot 0) and 192 lanes. 150 m
+covers the farthest focal future measured (149 m). The caps sit just above the measured p99; the
+numbers behind them are in `configs/preprocess.yaml`. A scene over a cap loses its farthest
+elements, and `meta.json` counts how often that happens:
+
+| Split | Scenarios | On disk | Over agent cap | Over lane cap | Time, 8 workers |
+| --- | --- | --- | --- | --- | --- |
+| train | 199,908 | 15.72 GB | 0.69% | 0.16% | 23 min |
+| val | 24,988 | 1.96 GB | 0.68% | 0.15% | 2 min |
+| test | 24,984 | 1.94 GB | 0.62% | 0.18% | 2 min |
+
+**Layout** — `<data_root>/processed/<split>/`, one `.npy` per field, row *i* = *i*-th scenario of
+the split manifest. Load with `np.load(path, mmap_mode="r")`.
+
+| File | Shape | dtype | Content |
+| --- | --- | --- | --- |
+| `agents.npy` | [N, 64, 50, 5] | float32 | history x, y, vx, vy, heading; zeros where invalid |
+| `agent_valid.npy` | [N, 64, 50] | bool | step observed |
+| `agent_type.npy` | [N, 64] | int8 | index into `object_types` in `meta.json`; -1 = empty slot |
+| `lanes.npy` | [N, 192, 10, 2] | float32 | 10-point centerline from the `av2` map API |
+| `lane_type.npy` | [N, 192] | int8 | index into `lane_types`; -1 = empty slot |
+| `lane_intersection.npy` | [N, 192] | bool | segment lies in an intersection |
+| `target.npy` | [N, 60, 5] | float32 | focal future, same features (train and val only) |
+| `origin.npy`, `theta.npy` | [N, 2], [N] | float64 | frame origin and heading in city coordinates |
+| `scenario_id.npy`, `city.npy` | [N] | str | |
+| `meta.json` | | | parameters, type vocabularies, truncation counts, git commit |
+
+Every focal type is kept (`agent_type[:, 0]`). Vehicle-only selection and training subsets are
+index choices at training time, and the test split keeps every focal agent for the leaderboard.
+
+**Checks** — every scenario asserts that the focal agent sits at the origin with zero heading, that
+kept agents are present at t=49, that all values are finite, and that train/val have 60 future
+steps. `src/visualize.py` maps processed rows back to city coordinates and compares them with the
+raw scenario; the largest position error seen is under 1e-5 m (float32 precision). Two full val
+runs, and two full test runs, produced bit-identical files; re-processing 20 random rows per split
+matches the stored arrays exactly. 143 test parquets store `timestep` as float64 instead of int64;
+the preprocessing casts it and asserts nothing is lost.
 
 ## Results
 
