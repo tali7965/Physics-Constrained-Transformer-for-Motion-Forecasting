@@ -1,0 +1,22 @@
+# LSTM encoder-decoder baseline (Phase 2).
+name: lstm
+
+# Train / dev protocol shared by every model. A seeded permutation of the train split: the first
+# dev_size rows are the dev set (model selection only); the next subset_size rows are the training
+# subset. fraction takes a prefix of it (0.10 / 0.25 / 1.0), so smaller subsets are nested.
+protocol:
+  seed: 0
+  dev_size: 5000
+  subset_size: 50000
+  fraction: 1.0
+
+model:
+  hidden: 128
+  encoder_layers: 2
+
+train:
+  epochs: 30
+  batch_size: 256
+  lr: 1.0e-3
+  grad_clip: 1.0
+  seed: 0
