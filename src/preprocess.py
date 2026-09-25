@@ -65,7 +65,10 @@ def track_states(track, first, count):
     feats = np.zeros((count, len(FEATURES)))
     valid = np.zeros(count, dtype=bool)
     for s in track.object_states:
-        i = s.timestep - first
+        # 143 of 24,984 test parquets store timestep as float64 (0.0, 1.0, ...) instead of int64.
+        t = int(s.timestep)
+        assert t == s.timestep, f"non-integer timestep {s.timestep}"
+        i = t - first
         if 0 <= i < count:
             feats[i] = (*s.position, *s.velocity, s.heading)
             valid[i] = True
