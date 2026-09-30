@@ -7,6 +7,7 @@ import numpy as np
 from config import load_config
 
 VEHICLE_LIKE = ("VEHICLE", "BUS", "MOTORCYCLIST")
+SCENE_FIELDS = ("agents", "agent_valid", "agent_type", "lanes", "lane_type", "lane_intersection")
 
 
 def split_meta(split):
@@ -28,11 +29,12 @@ def split_rows(protocol, n_train):
     return np.sort(train), np.sort(perm[:dev_size])
 
 
-def load_focal(split, rows=None):
+def load_focal(split, rows=None, scene=False):
     """Focal-agent arrays of a processed split, copied into RAM.
 
     Returns a dict with history (N, 50, 5), target (N, 60, 5) or None for test, focal_type (N,),
-    vehicle_like (N,) bool, and rows (N,) -- the processed row numbers.
+    vehicle_like (N,) bool, and rows (N,) -- the processed row numbers. With scene=True it also
+    holds the full-scene arrays named in SCENE_FIELDS (about 84 KB per scenario).
     """
     d = load_config()["processed_dir"] / split
     meta = split_meta(split)
@@ -45,10 +47,13 @@ def load_focal(split, rows=None):
     assert read("agent_valid", 0).all(), f"{split}: focal history has invalid steps"
     focal_type = read("agent_type", 0)
     types = meta["object_types"]
-    return {
+    data = {
         "history": history,
         "target": read("target") if (d / "target.npy").exists() else None,
         "focal_type": focal_type,
         "vehicle_like": np.isin(focal_type, [types.index(t) for t in VEHICLE_LIKE]),
         "rows": rows,
     }
+    if scene:
+        data.update({name: read(name) for name in SCENE_FIELDS})
+    return data
