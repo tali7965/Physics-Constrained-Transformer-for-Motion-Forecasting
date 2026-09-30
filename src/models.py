@@ -102,7 +102,7 @@ class TransformerForecaster(nn.Module):
 
         self.encoder = nn.TransformerEncoder(layer(nn.TransformerEncoderLayer), encoder_layers,
                                              norm=nn.LayerNorm(d), enable_nested_tensor=False)
-        self.mode_emb = nn.Parameter(torch.randn(modes, d) * 0.02)
+        self.mode_emb = nn.Parameter(torch.randn(modes, d))  # token scale, so the K queries start distinct
         self.decoder = nn.TransformerDecoder(layer(nn.TransformerDecoderLayer), decoder_layers, norm=nn.LayerNorm(d))
         self.traj_head = mlp(d, 2 * d, FUTURE * 2)
         self.score_head = nn.Linear(d, 1)

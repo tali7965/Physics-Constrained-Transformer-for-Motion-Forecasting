@@ -9,11 +9,17 @@ For each row, writes outputs/figures/<split>_<row>_<scenario-id>.png with two pa
          mapped back to global coordinates drawn on top as dots. The two must coincide.
   right: the processed scene in the focal-agent frame, as a model will see it.
 Also prints the largest raw-vs-round-trip error per row and exits non-zero above 1 mm.
+
+    python src/visualize.py --split train --random 6 --checkpoint outputs/runs/transformer/best.pt
+
+With --checkpoint, instead plots the model's predicted modes in the focal-agent frame, to
+outputs/figures/pred_<run>_<split>_<row>.png; --random on the train split draws from the dev rows.
 """
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import matplotlib
 
@@ -24,6 +30,7 @@ from av2.datasets.motion_forecasting.scenario_serialization import load_argovers
 from av2.map.map_api import ArgoverseStaticMap
 
 from config import PROJECT_ROOT, load_config
+from data import load_focal, split_rows
 from download import SPLITS, scenario_files
 from preprocess import CURRENT, FUTURE, HISTORY, rotate, to_global_frame, track_states, wrap_angle
 
@@ -189,6 +196,66 @@ def plot_row(a, meta, row, sc, avm, path):
     plt.close(fig)
 
 
+def plot_predictions(a, meta, row, pred, prob, title, path):
+    """Lanes, agents, the focal history and ground truth, and the K predicted modes of one row.
+    Modes are drawn more opaque the more probable they are, the most probable one thickest."""
+    types = a["agent_type"][row]
+    n_agents, n_lanes = int((types >= 0).sum()), int((a["lane_type"][row] >= 0).sum())
+    agents, valid = a["agents"][row].astype(np.float64), np.asarray(a["agent_valid"][row])
+    target = a["target"][row, :, :2].astype(np.float64)
+    pts = np.vstack([agents[0, valid[0], :2], target, pred.reshape(-1, 2)])
+    lo, hi = pts.min(0) - 15.0, pts.max(0) + 15.0
+    half = max(30.0, float((hi - lo).max()) / 2)
+    mid = (lo + hi) / 2
+
+    fig, ax = plt.subplots(figsize=(8, 8), facecolor=SURFACE)
+    for k in range(n_lanes):
+        ls = "--" if a["lane_intersection"][row, k] else "-"
+        ax.plot(*a["lanes"][row, k].T, color=LANE, lw=1, ls=ls, zorder=1)
+    for k in range(1, n_agents):
+        ax.plot(*agents[k, valid[k], :2].T, color=OTHERS, lw=1.2, zorder=2)
+    ax.plot(*agents[0, valid[0], :2].T, color=FOCAL, lw=2, zorder=3, label="focal history")
+    ax.plot(*target.T, color=FOCAL_FUTURE, lw=2, zorder=3, label="ground truth")
+    top = int(np.argmax(prob))
+    for m in np.argsort(prob):
+        alpha = 0.25 + 0.75 * prob[m] / prob.max()
+        ax.plot(*pred[m].T, color=INK, lw=2.2 if m == top else 1.2, alpha=alpha, zorder=4)
+        ax.annotate(f"{prob[m]:.2f}", pred[m, -1], fontsize=8, color=INK_2, zorder=5,
+                    xytext=(3, 3), textcoords="offset points")
+    ax.plot([], [], color=INK, lw=1.2, label="predicted modes (label = probability)")
+    ax.set_xlim(mid[0] - half, mid[0] + half)
+    ax.set_ylim(mid[1] - half, mid[1] + half)
+    style(ax, title)
+    ax.legend(loc="upper left", fontsize=8, frameon=True, facecolor=SURFACE, edgecolor=GRID, labelcolor=INK_2)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def main_predictions(args, meta, a):
+    from evaluate import load_checkpoint, predict  # torch only needed for this mode
+    from models import pick_device
+
+    device = pick_device()
+    model, ckpt = load_checkpoint(args.checkpoint, device)
+    run = ckpt["config"]["name"]
+    if args.index:
+        rows = np.array(sorted(args.index))
+    else:
+        pool = split_rows(ckpt["config"]["protocol"], meta["n_scenarios"])[1] if args.split == "train" else np.arange(meta["n_scenarios"])
+        rows = np.sort(np.random.default_rng(args.seed).choice(pool, size=args.random, replace=False))
+    pred, prob = predict(model, load_focal(args.split, rows, scene=True), device)
+    out_dir = PROJECT_ROOT / "outputs" / "figures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, row in enumerate(rows):
+        err = np.linalg.norm(pred[i, :, -1] - a["target"][row, -1, :2], axis=-1)
+        title = (f"{run} · {args.split} row {row} · {meta['object_types'][a['agent_type'][row, 0]]} · "
+                 f"top-mode FDE {err[np.argmax(prob[i])]:.1f} m, best of {len(err)} {err.min():.1f} m")
+        path = out_dir / f"pred_{run}_{args.split}_{row}.png"
+        plot_predictions(a, meta, row, pred[i], prob[i], title, path)
+        print(f"row {row:>6}  mode probs {np.round(prob[i], 2)}  -> {path.relative_to(PROJECT_ROOT)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--split", required=True, choices=SPLITS)
@@ -196,9 +263,14 @@ def main():
     pick.add_argument("--index", type=int, nargs="+", help="processed row numbers")
     pick.add_argument("--random", type=int, help="number of random rows")
     parser.add_argument("--seed", type=int, default=0, help="seed for --random")
+    parser.add_argument("--checkpoint", type=Path, help="plot this model's predicted modes instead")
     args = parser.parse_args()
 
     meta, a = load_processed(args.split)
+    if args.checkpoint:
+        if args.split == "test":
+            sys.exit("--checkpoint needs a split with ground truth (train or val)")
+        return main_predictions(args, meta, a)
     n = meta["n_scenarios"]
     if args.index:
         rows = args.index

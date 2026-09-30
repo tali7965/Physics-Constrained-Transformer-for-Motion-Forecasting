@@ -5,6 +5,7 @@ Usage:
     python src/evaluate.py --model cv-displacement
     python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt
     python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt --split dev
+    python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
 
 Reports minADE, minFDE, MR (K=1, and K=6 for multimodal models) and brier-minFDE (K=6) for all
 focal agents and for vehicle-like ones, and writes outputs/results/<name>_<split>.json.
@@ -21,25 +22,35 @@ import yaml
 from config import PROJECT_ROOT
 from data import load_focal, split_meta, split_rows
 from metrics import forecast_metrics, summarize
-from models import LSTMForecaster, constant_velocity, pick_device
+from models import TransformerForecaster, build_model, constant_velocity, pick_device, scene_batch
 from preprocess import git_commit
 
 CV_MODELS = {"cv-tracker": "tracker", "cv-displacement": "displacement"}
 
 
 @torch.no_grad()
-def predict_lstm(model, history, device, batch_size=1024):
+def predict(model, data, device):
+    """Trajectories (N, K, 60, 2) and mode probabilities (N, K); the LSTM gives K=1 with p=1."""
     model.eval()
-    out = []
-    for i in range(0, len(history), batch_size):
-        x = torch.from_numpy(history[i : i + batch_size]).to(device)
-        out.append(model(x).cpu().numpy())
-    return np.concatenate(out)
+    n = len(data["history"])
+    if not isinstance(model, TransformerForecaster):
+        out = []
+        for i in range(0, n, 1024):
+            x = torch.from_numpy(data["history"][i : i + 1024]).to(device)
+            out.append(model(x).cpu().numpy())
+        pred = np.concatenate(out)[:, None]
+        return pred, np.ones((n, 1))
+    preds, probs = [], []
+    for i in range(0, n, 256):
+        traj, logits = model(scene_batch(data, slice(i, i + 256), device))
+        preds.append(traj.cpu().numpy())
+        probs.append(torch.softmax(logits, dim=-1).cpu().numpy())
+    return np.concatenate(preds), np.concatenate(probs)
 
 
 def load_checkpoint(path, device):
     ckpt = torch.load(path, map_location=device)
-    model = LSTMForecaster(**ckpt["config"]["model"]).to(device)
+    model = build_model(ckpt["config"]["model"]).to(device)
     model.load_state_dict(ckpt["model"])
     return model, ckpt
 
@@ -87,17 +98,18 @@ def main():
         cfg = yaml.safe_load(args.config.read_text())
         name = args.model
 
+    scene = isinstance(model, TransformerForecaster)
     if args.split == "dev":
         _, rows = split_rows(cfg["protocol"], split_meta("train")["n_scenarios"])
-        data = load_focal("train", rows)
+        data = load_focal("train", rows, scene=scene)
     else:
-        data = load_focal("val")
+        data = load_focal("val", scene=scene)
 
     if model is None:
         pred = constant_velocity(data["history"], CV_MODELS[args.model])
+        pred, prob = pred[:, None], np.ones((len(pred), 1))  # unimodal
     else:
-        pred = predict_lstm(model, data["history"], device)
-    pred, prob = pred[:, None], np.ones((len(pred), 1))  # both baselines are unimodal
+        pred, prob = predict(model, data, device)
 
     results = evaluate(pred, prob, data)
     print_table(name, results)
