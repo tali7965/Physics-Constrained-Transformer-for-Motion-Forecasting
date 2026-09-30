@@ -16,7 +16,9 @@ Full scope and timeline: [`VISION_PROJECT_SCOPE.md`](VISION_PROJECT_SCOPE.md).
 
 Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
 Phase 2 (Baselines) — complete: metrics, constant-velocity and LSTM baselines (see Results).
-Phase 3 (Transformer model) is next.
+Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=6 coordinate decoder
+beats the LSTM on every metric (see Results).
+Phase 4 (physics-constrained decoder) is next.
 
 ## Setup
 
@@ -35,15 +37,16 @@ pip install -r requirements.txt
 ```text
 configs/preprocess.yaml   data paths and preprocessing parameters
 configs/lstm.yaml         train/dev protocol and LSTM baseline hyperparameters
+configs/transformer.yaml  the same protocol, Transformer hyperparameters
 src/config.py             config loading, data_root resolution
 src/download.py           fetch scenarios from the public Argoverse S3 bucket
 src/explore.py            measure and report the raw scenario format
 src/preprocess.py         raw scenarios -> agent-centric tensors
-src/visualize.py          scene plots, and visual validation of the frame transform
-src/data.py               train/dev row selection, in-memory loading of focal-agent data
+src/visualize.py          scene plots, frame-transform validation, predicted-mode plots
+src/data.py               train/dev row selection, in-memory loading of focal or full-scene data
 src/metrics.py            minADE, minFDE, miss rate, brier-minFDE (Argoverse 2 definitions)
-src/models.py             constant-velocity baseline and LSTM encoder-decoder
-src/train.py              training loop with dev-set model selection
+src/models.py             constant-velocity baseline, LSTM encoder-decoder, Transformer
+src/train.py              training loop (ADE or winner-takes-all loss), dev-set model selection
 src/evaluate.py           score a model on val (or dev) and write outputs/results/
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
@@ -198,4 +201,58 @@ python src/evaluate.py --model cv-tracker
 python src/evaluate.py --model cv-displacement
 python src/train.py --config configs/lstm.yaml
 python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt
+```
+
+### Transformer
+
+**Model** — every agent (its 50 history steps) and every lane (the 9 segments of its centerline) is
+encoded PointNet-style into one token: a shared MLP per step or segment, max-pooled, plus type
+embeddings; a learned timestep embedding keeps the order of history steps. A 4-layer Transformer
+encoder runs joint self-attention over all 64 agent and 192 lane tokens, so agent–agent and
+agent–map attention share the same layers; empty slots are masked, and there is no slot positional
+encoding, so outputs do not depend on slot order (checked: shuffling slots changes outputs by
+3e-14 m in float64). Six mode queries — the focal token plus a learned mode embedding — attend to
+the scene in a 2-layer Transformer decoder; an MLP maps each mode to 60 future positions and a
+linear layer to a logit. d=128, 8 heads, 1.43M parameters. The trajectory MLP is the part the
+Phase 4 physics head replaces.
+
+**Training** — winner-takes-all: the mode with the lowest endpoint error (the metric's rule) gets the
+ADE loss, and the logits get a cross-entropy loss towards that mode. Adam, cosine decay, gradient
+clipping 1.0, batch 64, 30 epochs, all focal types, same training subset and dev set as the LSTM.
+`best.pt` is the epoch with the lowest dev brier-minFDE at K=6. The full run takes 3.1 h on the M4
+GPU (116 scenes/s; the 50k scenes, 4.3 GB, are held in RAM).
+
+Mode embeddings must start at the scale of the tokens they are added to: initialised at std 0.02
+next to a layer-normed focal token, all six queries were nearly identical and the modes collapsed
+(endpoints 0.6 m apart, probabilities stuck at 1/6). At std 1 the modes separate.
+
+**Learning rate** — chosen on the 10% subset (5,000 scenes, 30 epochs), by dev brier-minFDE:
+
+| lr | dev brier-minFDE | dev minFDE, K=6 | dev minADE / minFDE, K=1 |
+| --- | --- | --- | --- |
+| 3e-4 | 4.18 | 3.59 | 3.63 / 9.00 |
+| **1e-3** | **3.95** | **3.29** | **3.51 / 8.75** |
+| 3e-3 | 6.04 | 5.39 | 4.38 / 11.25 |
+
+**Results on val** (K=1 uses the most probable mode):
+
+| Model | Population | K | minADE | minFDE | MR | brier-minFDE |
+| --- | --- | --- | --- | --- | --- | --- |
+| LSTM encoder–decoder | all focal | 1 | 3.15 | 8.33 | 0.821 | |
+| Transformer | all focal | 1 | **2.45** | **6.09** | **0.709** | |
+| Transformer | all focal | 6 | 1.06 | 1.94 | 0.303 | 2.57 |
+| LSTM encoder–decoder | vehicle-like | 1 | 3.31 | 8.78 | 0.856 | |
+| Transformer | vehicle-like | 1 | **2.56** | **6.40** | **0.740** | |
+| Transformer | vehicle-like | 6 | 1.10 | 2.01 | 0.317 | 2.64 |
+
+The Transformer beats the LSTM at K=1 by 22% on minADE and 27% on minFDE (all focal). Its weak
+point is mode scoring: the classification loss ends at 1.64 against 1.79 for uniform guessing, and
+the most probable mode is often not the closest one (K=1 minFDE 6.09 vs 1.94 at K=6). Dev metrics
+were still improving slightly at epoch 30. In the mode plots some low-probability modes wobble or
+leave the lanes, which is what the kinematic decoder of Phase 4 is meant to rule out.
+
+```bash
+python src/train.py --config configs/transformer.yaml
+python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
+python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/transformer/best.pt
 ```
