@@ -22,7 +22,7 @@ model:
 train:
   epochs: 30
   batch_size: 64
-  lr: 1.0e-3
+  lr: 3.0e-4
   grad_clip: 1.0
   seed: 0
   select: brier-minFDE@6   # dev metric for best.pt (K=6, the leaderboard metric)
