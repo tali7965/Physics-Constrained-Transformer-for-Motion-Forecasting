@@ -9,6 +9,12 @@ Usage:
 
 Reports minADE, minFDE, MR (K=1, and K=6 for multimodal models) and brier-minFDE (K=6) for all
 focal agents and for vehicle-like ones, and writes outputs/results/<name>_<split>.json.
+
+For vehicle-like agents it also reports the share of infeasible trajectories (at 10 Hz and 2 Hz, see
+metrics.py) and off-road ones, for the most probable mode (@1) and over all modes (@6), next to the
+ground truth's own rates. Pedestrians
+are left out: their ground truth is off the drivable area 75% of the time. Off-road reads each
+scenario's raw map (about 3 s per 1,000 scenarios).
 """
 
 import argparse
@@ -18,12 +24,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
+from av2.map.map_api import ArgoverseStaticMap
+from matplotlib.path import Path as PolygonPath
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, load_config
 from data import load_focal, split_meta, split_rows
-from metrics import forecast_metrics, summarize
+from metrics import forecast_metrics, infeasible, summarize
 from models import TransformerForecaster, build_model, constant_velocity, pick_device, scene_batch
-from preprocess import git_commit
+from preprocess import git_commit, to_global_frame
 
 CV_MODELS = {"cv-tracker": "tracker", "cv-displacement": "displacement"}
 
@@ -68,6 +76,43 @@ def evaluate(pred, prob, data):
     return results
 
 
+def off_road(split, rows, traj):
+    """Whether each trajectory (N, M, T, 2), in the focal frames of processed rows of split, has a
+    point outside every drivable-area polygon of its scenario's map. Returns bool (N, M)."""
+    cfg = load_config()
+    pdir, rdir = cfg["processed_dir"] / split, cfg["raw_dir"] / split
+    sid = np.load(pdir / "scenario_id.npy", mmap_mode="r")[rows]
+    origin, theta = np.load(pdir / "origin.npy")[rows], np.load(pdir / "theta.npy")[rows]
+    out = np.zeros(traj.shape[:2], dtype=bool)
+    for i in range(len(rows)):
+        avm = ArgoverseStaticMap.from_json(rdir / sid[i] / f"log_map_archive_{sid[i]}.json")
+        pts = to_global_frame(traj[i].reshape(-1, 2).astype(np.float64), origin[i], float(theta[i]))
+        inside = np.zeros(len(pts), dtype=bool)
+        for area in avm.get_scenario_vector_drivable_areas():
+            inside |= PolygonPath(area.xyz[:, :2]).contains_points(pts)
+        out[i] = ~inside.reshape(traj.shape[1], -1).all(axis=1)
+    return out
+
+
+def physical(pred, prob, data, split):
+    """Infeasible and off-road shares for vehicle-like agents: the most probable mode (@1), all modes
+    (@6, multimodal models only), and the ground truth."""
+    mask = data["vehicle_like"]
+    pred, prob, gt = pred[mask], prob[mask], data["target"][mask][:, None, :, :2]
+    start = data["history"][mask][:, None, -1, :2]
+    top = np.argmax(prob, axis=1)  # first mode on ties, as in forecast_metrics
+    out = {}
+    for name, flags in (("infeasible 10Hz", lambda t: infeasible(t, start, stride=1)),
+                        ("infeasible 2Hz", lambda t: infeasible(t, start, stride=5)),
+                        ("off-road", lambda t: off_road(split, data["rows"][mask], t))):
+        per_mode = flags(pred)
+        out[f"{name}@1"] = float(per_mode[np.arange(len(top)), top].mean())
+        if prob.shape[1] >= 6:
+            out[f"{name}@6"] = float(per_mode.mean())
+        out[f"{name} ground truth"] = float(flags(gt).mean())
+    return out
+
+
 def print_table(name, results):
     print(f"{'model':<18} {'population':<13} {'n':>7}  {'K':>2} {'minADE':>7} {'minFDE':>7} {'MR':>6} {'brier-minFDE':>13}")
     for population, res in results.items():
@@ -76,6 +121,10 @@ def print_table(name, results):
                 r = res[key]
                 brier = f"{r['brier-minFDE']:13.2f}" if key == "K=6" else f"{'-':>13}"
                 print(f"{name:<18} {population:<13} {res['n']:>7,}  {key[2:]:>2} {r['minADE']:7.2f} {r['minFDE']:7.2f} {r['MR']:6.3f} {brier}")
+    if "physical" in results["vehicle-like"]:
+        print("\nvehicle-like, share of trajectories:")
+        for key, value in results["vehicle-like"]["physical"].items():
+            print(f"  {key:<29} {value:7.2%}")
 
 
 def main():
@@ -112,6 +161,7 @@ def main():
         pred, prob = predict(model, data, device)
 
     results = evaluate(pred, prob, data)
+    results["vehicle-like"]["physical"] = physical(pred, prob, data, "train" if args.split == "dev" else "val")
     print_table(name, results)
 
     out = PROJECT_ROOT / "outputs" / "results" / f"{name}_{args.split}.json"

@@ -7,9 +7,8 @@ import torch
 from torch import nn
 
 from data import SCENE_FIELDS
-from preprocess import FUTURE, HISTORY
-
-DT = 0.1  # seconds per step
+import physics
+from preprocess import DT, FUTURE, HISTORY
 
 
 def pick_device():
@@ -82,13 +81,21 @@ class TransformerForecaster(nn.Module):
     agent-agent and agent-map attention share the same layers; empty slots are masked out. K mode
     queries -- the focal token plus a learned mode embedding -- attend to the scene in a Transformer
     decoder. traj_head maps each mode embedding to 60 future positions, score_head to a logit.
+
+    head="physics" makes traj_head output 60 bounded (acceleration, steering) controls instead,
+    rolled out through the kinematic model in physics.py from the focal agent's t=49 state, so every
+    mode is drivable by construction.
     """
 
     POS_SCALE, VEL_SCALE = LSTMForecaster.POS_SCALE, LSTMForecaster.VEL_SCALE
     N_OBJECT_TYPES, N_LANE_TYPES = 10, 3
 
-    def __init__(self, d=128, heads=8, encoder_layers=4, decoder_layers=2, ffn=512, dropout=0.1, modes=6):
+    def __init__(self, d=128, heads=8, encoder_layers=4, decoder_layers=2, ffn=512, dropout=0.1, modes=6,
+                 head="coordinate"):
         super().__init__()
+        if head not in ("coordinate", "physics"):
+            raise ValueError(f"unknown head {head!r}")
+        self.head = head
         self.agent_in = nn.Linear(6, d)
         self.time_emb = nn.Parameter(torch.zeros(HISTORY, d))
         self.agent_mlp = nn.Sequential(nn.LayerNorm(d), nn.ReLU(), nn.Linear(d, d))
@@ -130,7 +137,12 @@ class TransformerForecaster(nn.Module):
         scene = self.encoder(tokens, src_key_padding_mask=pad)
         queries = scene[:, 0:1] + self.mode_emb
         modes = self.decoder(queries, scene, memory_key_padding_mask=pad)  # (B, K, d)
-        traj = self.traj_head(modes).unflatten(-1, (FUTURE, 2)) * self.POS_SCALE
+        out = self.traj_head(modes).unflatten(-1, (FUTURE, 2))
+        if self.head == "physics":
+            pos, heading, speed = physics.initial_state(batch["agents"][:, 0, None])  # (B, 1): shared by the K modes
+            traj = physics.rollout(pos, heading, speed, physics.bound(out))
+        else:
+            traj = out * self.POS_SCALE
         return traj, self.score_head(modes).squeeze(-1)
 
 

@@ -33,6 +33,7 @@ from download import SPLITS, scenario_files
 HISTORY = 50            # observed steps, 5 s at 10 Hz
 FUTURE = 60             # future steps, 6 s
 CURRENT = HISTORY - 1   # t=49, the reference step of the agent frame
+DT = 0.1                # seconds per step
 CENTERLINE_POINTS = 10  # av2 API centerline length
 FEATURES = ("x", "y", "vx", "vy", "heading")
 
