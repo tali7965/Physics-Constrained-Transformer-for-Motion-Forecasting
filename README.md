@@ -18,7 +18,9 @@ Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visua
 Phase 2 (Baselines) — complete: metrics, constant-velocity and LSTM baselines (see Results).
 Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=6 coordinate decoder
 beats the LSTM on every metric (see Results).
-Phase 4 (physics-constrained decoder) is next.
+Phase 4 (physics-constrained decoder) — complete: it trains stably and every predicted trajectory is
+feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
+Phase 5 (experiments) is next.
 
 ## Setup
 
@@ -38,16 +40,18 @@ pip install -r requirements.txt
 configs/preprocess.yaml   data paths and preprocessing parameters
 configs/lstm.yaml         train/dev protocol and LSTM baseline hyperparameters
 configs/transformer.yaml  the same protocol, Transformer hyperparameters
+configs/physics.yaml      the Transformer with the physics head
 src/config.py             config loading, data_root resolution
 src/download.py           fetch scenarios from the public Argoverse S3 bucket
 src/explore.py            measure and report the raw scenario format
 src/preprocess.py         raw scenarios -> agent-centric tensors
 src/visualize.py          scene plots, frame-transform validation, predicted-mode plots
 src/data.py               train/dev row selection, in-memory loading of focal or full-scene data
-src/metrics.py            minADE, minFDE, miss rate, brier-minFDE (Argoverse 2 definitions)
+src/metrics.py            minADE, minFDE, miss rate, brier-minFDE (Argoverse 2 definitions), feasibility
 src/models.py             constant-velocity baseline, LSTM encoder-decoder, Transformer
+src/physics.py            differentiable kinematic bicycle model, control fitting to ground truth
 src/train.py              training loop (ADE or winner-takes-all loss), dev-set model selection
-src/evaluate.py           score a model on val (or dev) and write outputs/results/
+src/evaluate.py           score a model on val (or dev), incl. off-road, and write outputs/results/
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```
@@ -255,4 +259,84 @@ leave the lanes, which is what the kinematic decoder of Phase 4 is meant to rule
 python src/train.py --config configs/transformer.yaml
 python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/transformer/best.pt
+```
+
+### Physics-constrained decoder
+
+**Model** — the Transformer above with only `traj_head` changed: per mode it outputs 60 pairs of
+controls instead of 60 positions, bounded with `tanh` to an acceleration in ±8 m/s² and a steering
+fraction in ±1. `src/physics.py` integrates them through a kinematic bicycle model in curvature form
+from the focal agent's state at t=49 (position; heading and speed from the last-step displacement,
+the recorded heading below 0.5 m/s). Curvature is the steering fraction times
+min(0.2 1/m, 6 m/s² / v²), a 5 m turning radius at low speed and at most 6 m/s² of lateral
+acceleration above it; speed cannot go negative. Every mode is therefore drivable by construction.
+The parameter count (1.43M), losses, protocol and all other settings are unchanged, and the head is
+used for every focal type, pedestrians included. Fitting controls directly to ground-truth futures
+(`python src/physics.py --check`, 2,000 vehicle-like training scenes) puts the head's error floor at
+0.16 m FDE on average, with 0.55% of futures more than 2 m away.
+
+**Feasibility metrics** — for vehicle-like agents, a trajectory is *infeasible* if its lateral
+acceleration (speed × yaw rate) exceeds 8 m/s² at any step while moving faster than 1 m/s. It is
+measured at 10 Hz, where ±4 cm of step-to-step zigzag already crosses the limit, and on the
+trajectory resampled to 2 Hz, which judges the manoeuvre's shape. A trajectory is *off-road* if any
+point lies outside every drivable-area polygon of the scenario's map. Both are reported for the most
+probable mode (@1), over all six modes (@6), and for the ground truth.
+
+**Learning rate** — chosen on the 10% subset as for the coordinate head (best coordinate head there:
+3.95):
+
+| lr | dev brier-minFDE | dev minFDE, K=6 | dev minADE / minFDE, K=1 |
+| --- | --- | --- | --- |
+| 1e-4 | 4.39 | 3.75 | 3.53 / 9.29 |
+| **3e-4** | **4.19** | **3.53** | 3.94 / 10.29 |
+| 1e-3 | 5.81 | 5.20 | 4.20 / 10.69 |
+
+**Results on val** (K=1 uses the most probable mode):
+
+| Model | Population | K | minADE | minFDE | MR | brier-minFDE |
+| --- | --- | --- | --- | --- | --- | --- |
+| Transformer, coordinate head | all focal | 1 | **2.45** | **6.09** | **0.709** | |
+| Transformer, physics head | all focal | 1 | 2.74 | 6.95 | 0.755 | |
+| Transformer, coordinate head | all focal | 6 | **1.06** | **1.94** | **0.303** | **2.57** |
+| Transformer, physics head | all focal | 6 | 1.25 | 2.55 | 0.431 | 3.16 |
+| Transformer, coordinate head | vehicle-like | 1 | **2.56** | **6.40** | **0.740** | |
+| Transformer, physics head | vehicle-like | 1 | 2.89 | 7.35 | 0.791 | |
+| Transformer, coordinate head | vehicle-like | 6 | **1.10** | **2.01** | **0.317** | **2.64** |
+| Transformer, physics head | vehicle-like | 6 | 1.31 | 2.67 | 0.457 | 3.28 |
+
+**Physical plausibility on val**, vehicle-like agents (23,113), share of trajectories:
+
+| | Infeasible, 10 Hz | Infeasible, 2 Hz | Off-road |
+| --- | --- | --- | --- |
+| Ground truth | 2.93% | 0.41% | 0.19% |
+| Coordinate head @1 / @6 | 57.8% / 70.0% | 0.00% / 0.01% | **1.52% / 1.75%** |
+| Physics head @1 / @6 | **0.00% / 0.00%** | 0.00% / 0.00% | 5.17% / 5.68% |
+
+The physics head meets the Phase 4 milestone. It trains stably, and none of its trajectories are
+infeasible at either resolution. In the six dev mode plots its paths are smooth and follow the lane direction.
+
+It does not yet pay for itself, though. On val it is behind the coordinate head on every accuracy
+metric: brier-minFDE is 3.16 against 2.57, and K=1 minFDE is 6.95 against 6.09. It still beats the
+LSTM at K=1 (2.74 / 6.95 against 3.15 / 8.33). The gap on dev grew from 0.24 m on the 10% subset to
+0.63 m on the full subset (3.21 against 2.58).
+
+The physics head underfits. Train ADE ends at 1.18 against 1.04, and dev brier-minFDE improves only
+slowly after epoch 20 (3.30 at epoch 20, 3.21 at epoch 28). Since the head can reach vehicle-like
+ground-truth futures to within 0.16 m, the limit looks like optimisation rather than what the head
+can express. That is not yet tested.
+
+The coordinate head's infeasibility is almost entirely step-to-step jitter. At 2 Hz its paths are
+already feasible (0.00%, against 0.41% for the ground truth).
+
+The physics head leaves the drivable area more than three times as often (5.2% against 1.5%), and the cause is
+not yet known. Its mode scoring is slightly better: the classification loss ends at 1.59 against
+1.64.
+
+The full run takes 3.3 h on the M4 GPU, against 3.1 h for the coordinate head.
+
+```bash
+python src/physics.py --check --n 2000
+python src/train.py --config configs/physics.yaml
+python src/evaluate.py --checkpoint outputs/runs/physics/best.pt
+python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics/best.pt
 ```

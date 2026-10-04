@@ -12,8 +12,8 @@ heading turns by kappa * ds. Speed never goes negative, so the model cannot reve
 reversing is 0.07% of vehicle-like focal futures in the training subset).
 
 The bounds come from ground-truth fitting (--check) on the training subset: with them the best
-reachable trajectory is within 0.15 m FDE of the truth on average, and adding the lateral limit
-costs nothing measurable.
+reachable vehicle-like trajectory is within 0.16 m FDE of the truth on average, and adding the
+lateral limit costs nothing measurable.
 
 Usage:
     python src/physics.py --check --n 2000   # fit controls to ground truth: the head's error floor
