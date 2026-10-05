@@ -13,3 +13,6 @@ outputs/
 # OS / editor / tooling
 .DS_Store
 .claude/settings.local.json
+
+# Private planning notes
+VISION_PROJECT_SCOPE.md

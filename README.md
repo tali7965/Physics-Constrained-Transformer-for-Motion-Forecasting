@@ -10,8 +10,6 @@ trajectory is kinematically drivable by construction.
 The central experiment compares this physics-constrained decoder against an unconstrained coordinate
 decoder on accuracy, trajectory feasibility, and data efficiency.
 
-Full scope and timeline: [`VISION_PROJECT_SCOPE.md`](VISION_PROJECT_SCOPE.md).
-
 ## Status
 
 Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
