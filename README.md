@@ -40,6 +40,7 @@ configs/preprocess.yaml   data paths and preprocessing parameters
 configs/lstm.yaml         train/dev protocol and LSTM baseline hyperparameters
 configs/transformer.yaml  the same protocol, Transformer hyperparameters
 configs/physics.yaml      the Transformer with the physics head
+configs/phase5/           Phase 5 runs: seeds, data fractions, no-map and K ablations, step-0 tests
 src/config.py             config loading, data_root resolution
 src/download.py           fetch scenarios from the public Argoverse S3 bucket
 src/explore.py            measure and report the raw scenario format
@@ -51,6 +52,8 @@ src/models.py             constant-velocity baseline, LSTM encoder-decoder, Tran
 src/physics.py            differentiable kinematic bicycle model, control fitting to ground truth
 src/train.py              training loop (ADE or winner-takes-all loss), dev-set model selection
 src/evaluate.py           score a model on val (or dev), incl. off-road, and write outputs/results/
+src/diagnose.py           compare the physics and coordinate heads on dev (Phase 5 step 0)
+src/submit.py             leaderboard submission file for the focal agent, with an end-to-end check on val
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```

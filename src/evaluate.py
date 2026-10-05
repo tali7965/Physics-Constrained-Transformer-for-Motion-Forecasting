@@ -7,11 +7,12 @@ Usage:
     python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt --split dev
     python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
 
-Reports minADE, minFDE, MR (K=1, and K=6 for multimodal models) and brier-minFDE (K=6) for all
-focal agents and for vehicle-like ones, and writes outputs/results/<name>_<split>.json.
+Reports minADE, minFDE, MR (K=1, and K=6 -- or the model's own number of modes K -- for multimodal
+models) and brier-minFDE (at that K) for all focal agents and for vehicle-like ones, and writes
+outputs/results/<name>_<split>.json.
 
 For vehicle-like agents it also reports the share of infeasible trajectories (at 10 Hz and 2 Hz, see
-metrics.py) and off-road ones, for the most probable mode (@1) and over all modes (@6), next to the
+metrics.py) and off-road ones, for the most probable mode (@1) and over all modes (@K), next to the
 ground truth's own rates. Pedestrians
 are left out: their ground truth is off the drivable area 75% of the time. Off-road reads each
 scenario's raw map (about 3 s per 1,000 scenarios).
@@ -64,15 +65,14 @@ def load_checkpoint(path, device):
 
 
 def evaluate(pred, prob, data):
-    """Per-population, per-K averaged metrics."""
+    """Per-population averaged metrics at K=1 and at the model's number of modes."""
     results = {}
     for population, mask in (("all", None), ("vehicle-like", data["vehicle_like"])):
         n = len(pred) if mask is None else int(mask.sum())
         results[population] = {"n": n}
-        for k in (1, 6):
-            if prob.shape[1] >= k:
-                per = forecast_metrics(pred, prob, data["target"][..., :2], k)
-                results[population][f"K={k}"] = summarize(per, mask)
+        for k in sorted({1, prob.shape[1]}):
+            per = forecast_metrics(pred, prob, data["target"][..., :2], k)
+            results[population][f"K={k}"] = summarize(per, mask)
     return results
 
 
@@ -95,8 +95,8 @@ def off_road(split, rows, traj):
 
 
 def physical(pred, prob, data, split):
-    """Infeasible and off-road shares for vehicle-like agents: the most probable mode (@1), all modes
-    (@6, multimodal models only), and the ground truth."""
+    """Infeasible and off-road shares for vehicle-like agents: the most probable mode (@1), all K modes
+    (@K, multimodal models only), and the ground truth."""
     mask = data["vehicle_like"]
     pred, prob, gt = pred[mask], prob[mask], data["target"][mask][:, None, :, :2]
     start = data["history"][mask][:, None, -1, :2]
@@ -107,8 +107,8 @@ def physical(pred, prob, data, split):
                         ("off-road", lambda t: off_road(split, data["rows"][mask], t))):
         per_mode = flags(pred)
         out[f"{name}@1"] = float(per_mode[np.arange(len(top)), top].mean())
-        if prob.shape[1] >= 6:
-            out[f"{name}@6"] = float(per_mode.mean())
+        if prob.shape[1] > 1:
+            out[f"{name}@{prob.shape[1]}"] = float(per_mode.mean())
         out[f"{name} ground truth"] = float(flags(gt).mean())
     return out
 
@@ -116,11 +116,10 @@ def physical(pred, prob, data, split):
 def print_table(name, results):
     print(f"{'model':<18} {'population':<13} {'n':>7}  {'K':>2} {'minADE':>7} {'minFDE':>7} {'MR':>6} {'brier-minFDE':>13}")
     for population, res in results.items():
-        for key in ("K=1", "K=6"):
-            if key in res:
-                r = res[key]
-                brier = f"{r['brier-minFDE']:13.2f}" if key == "K=6" else f"{'-':>13}"
-                print(f"{name:<18} {population:<13} {res['n']:>7,}  {key[2:]:>2} {r['minADE']:7.2f} {r['minFDE']:7.2f} {r['MR']:6.3f} {brier}")
+        for key in (key for key in res if key.startswith("K=")):
+            r = res[key]
+            brier = f"{r['brier-minFDE']:13.2f}" if key != "K=1" else f"{'-':>13}"
+            print(f"{name:<18} {population:<13} {res['n']:>7,}  {key[2:]:>2} {r['minADE']:7.2f} {r['minFDE']:7.2f} {r['MR']:6.3f} {brier}")
     if "physical" in results["vehicle-like"]:
         print("\nvehicle-like, share of trajectories:")
         for key, value in results["vehicle-like"]["physical"].items():

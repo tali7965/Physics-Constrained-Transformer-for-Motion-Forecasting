@@ -1,0 +1,27 @@
+# Phase 5: configs/transformer.yaml with three modes (K=3); best.pt by dev brier-minFDE@3.
+name: transformer-k3
+
+# Train / dev protocol: identical to configs/lstm.yaml, so both models see the same rows.
+protocol:
+  seed: 0
+  dev_size: 5000
+  subset_size: 50000
+  fraction: 1.0
+
+model:
+  type: transformer
+  d: 128
+  heads: 8
+  encoder_layers: 4
+  decoder_layers: 2
+  ffn: 512
+  dropout: 0.1
+  modes: 3
+
+train:
+  epochs: 30
+  batch_size: 64
+  lr: 1.0e-3
+  grad_clip: 1.0
+  seed: 0
+  select: brier-minFDE@3

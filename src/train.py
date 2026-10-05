@@ -9,8 +9,9 @@ Loads the training subset and dev rows into memory (focal history for the LSTM, 
 Transformer), trains on MPS when available, and after each epoch records train loss and dev metrics
 in outputs/runs/<name>/metrics.csv (a summary line goes to train.log). best.pt is saved whenever
 the dev metric named by train.select improves (default minADE at K=1); last.pt at every logged
-epoch and at the end. With --overfit N the model trains and is scored on the first N training rows
-only.
+epoch and at the end. train.eval_every (default 1) scores dev only every that many epochs and at
+the end, so runs with many short epochs are checked as often per step as full ones. With
+--overfit N the model trains and is scored on the first N training rows only.
 """
 
 import argparse
@@ -47,13 +48,15 @@ def wta_loss(traj, logits, target):
 
 
 def score(model, data, device):
-    """Dev metrics: K=1 (most probable mode) as minADE, minFDE, MR; K=6 ones suffixed @6."""
+    """Dev metrics: K=1 (most probable mode) as minADE, minFDE, MR; for a model with K > 1 modes,
+    the K-mode ones suffixed @K."""
     pred, prob = predict(model, data, device)
     gt = data["target"][..., :2]
     out = summarize(forecast_metrics(pred, prob, gt, 1))
     del out["brier-minFDE"]
-    if prob.shape[1] >= 6:
-        out.update({f"{k}@6": v for k, v in summarize(forecast_metrics(pred, prob, gt, 6)).items()})
+    k = prob.shape[1]
+    if k > 1:
+        out.update({f"{name}@{k}": v for name, v in summarize(forecast_metrics(pred, prob, gt, k)).items()})
     return out
 
 
@@ -67,8 +70,10 @@ def main():
     cfg = yaml.safe_load(args.config.read_text())
     tc = cfg["train"]
     epochs = args.epochs or tc["epochs"]
+    eval_every = tc.get("eval_every", 1)
     select = tc.get("select", "minADE")
     multimodal = cfg["model"].get("type", "lstm") == "transformer"
+    modes = cfg["model"].get("modes", 1) if multimodal else 1
     name = cfg["name"] + (f"-overfit{args.overfit}" if args.overfit else "")
     run_dir = PROJECT_ROOT / "outputs" / "runs" / name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -100,17 +105,17 @@ def main():
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * steps_per_epoch)
     shuffle = torch.Generator().manual_seed(tc["seed"])
     log.info(f"{sum(p.numel() for p in model.parameters()):,} parameters, {epochs} epochs x {steps_per_epoch} steps, "
-             f"best.pt by dev {select}")
+             f"best.pt by dev {select}" + (f", dev scored every {eval_every} epochs" if eval_every > 1 else ""))
 
     log_every = max(1, epochs // 30)
-    dev_keys = ["minADE", "minFDE", "MR"] + (["minADE@6", "minFDE@6", "MR@6", "brier-minFDE@6"] if multimodal else [])
+    dev_keys = ["minADE", "minFDE", "MR"] + ([f"{m}@{modes}" for m in ("minADE", "minFDE", "MR", "brier-minFDE")] if modes > 1 else [])
     fields = ["epoch", "train_ade"] + (["train_cls"] if multimodal else []) + [f"dev_{k}" for k in dev_keys] + ["lr", "seconds"]
     best = float("inf")
     with open(run_dir / "metrics.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
+        t0 = time.time()
         for epoch in range(1, epochs + 1):
-            t0 = time.time()
             model.train()
             total, total_cls, count = 0.0, 0.0, 0
             for idx in torch.randperm(len(y), generator=shuffle).split(tc["batch_size"]):
@@ -133,6 +138,8 @@ def main():
             train_ade = total / count
             if not np.isfinite(train_ade + total_cls):
                 raise RuntimeError(f"epoch {epoch}: non-finite train loss")
+            if epoch % eval_every and epoch != epochs:
+                continue
             d = score(model, dev, device)
             row = {"epoch": epoch, "train_ade": round(train_ade, 4), **{f"dev_{k}": round(d[k], 4) for k in dev_keys},
                    "lr": f"{sched.get_last_lr()[0]:.2e}", "seconds": round(time.time() - t0, 1)}
@@ -148,9 +155,10 @@ def main():
                 torch.save(state, run_dir / "best.pt")
             if epoch % log_every == 0 or epoch == epochs:
                 torch.save(state, run_dir / "last.pt")
-                extra = f"  @6 minFDE {d['minFDE@6']:.3f}  brier {d['brier-minFDE@6']:.3f}" if multimodal else ""
+                extra = f"  @{modes} minFDE {d[f'minFDE@{modes}']:.3f}  brier {d[f'brier-minFDE@{modes}']:.3f}" if modes > 1 else ""
                 log.info(f"epoch {epoch:4d}  train ADE {train_ade:.3f}  dev minADE {d['minADE']:.3f}  "
                          f"minFDE {d['minFDE']:.3f}  MR {d['MR']:.3f}{extra}  ({row['seconds']}s){'  *' if improved else ''}")
+            t0 = time.time()
 
     log.info(f"done: best dev {select} {best:.3f}; checkpoints and metrics.csv in {run_dir.relative_to(PROJECT_ROOT)}")
 

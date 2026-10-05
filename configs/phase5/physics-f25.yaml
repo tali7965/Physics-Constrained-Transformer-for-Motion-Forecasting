@@ -1,0 +1,30 @@
+# Phase 5: configs/physics.yaml with 25% of the training subset for 120 epochs (~23.5k steps, as
+# many as a full run), dev scored every 4 epochs (~780 steps, once per full-subset epoch).
+name: physics-f25
+
+# Train / dev protocol: identical to configs/lstm.yaml, so both models see the same rows.
+protocol:
+  seed: 0
+  dev_size: 5000
+  subset_size: 50000
+  fraction: 0.25
+
+model:
+  type: transformer
+  d: 128
+  heads: 8
+  encoder_layers: 4
+  decoder_layers: 2
+  ffn: 512
+  dropout: 0.1
+  modes: 6
+  head: physics
+
+train:
+  epochs: 120
+  eval_every: 4
+  batch_size: 64
+  lr: 3.0e-4
+  grad_clip: 1.0
+  seed: 0
+  select: brier-minFDE@6   # dev metric for best.pt (K=6, the leaderboard metric)

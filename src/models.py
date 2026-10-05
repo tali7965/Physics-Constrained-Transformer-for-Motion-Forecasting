@@ -86,13 +86,15 @@ class TransformerForecaster(nn.Module):
     rolled out through the kinematic model in physics.py from the focal agent's t=49 state, so every
     mode is drivable by construction. control_step > 1 makes it output controls only at knots every
     control_step steps, linearly interpolated in between.
+
+    use_map=False drops the lane tokens (the map ablation): the encoder sees only the agents.
     """
 
     POS_SCALE, VEL_SCALE = LSTMForecaster.POS_SCALE, LSTMForecaster.VEL_SCALE
     N_OBJECT_TYPES, N_LANE_TYPES = 10, 3
 
     def __init__(self, d=128, heads=8, encoder_layers=4, decoder_layers=2, ffn=512, dropout=0.1, modes=6,
-                 head="coordinate", control_step=1):
+                 head="coordinate", control_step=1, use_map=True):
         super().__init__()
         if head not in ("coordinate", "physics"):
             raise ValueError(f"unknown head {head!r}")
@@ -106,9 +108,11 @@ class TransformerForecaster(nn.Module):
         self.time_emb = nn.Parameter(torch.zeros(HISTORY, d))
         self.agent_mlp = nn.Sequential(nn.LayerNorm(d), nn.ReLU(), nn.Linear(d, d))
         self.agent_type_emb = nn.Embedding(self.N_OBJECT_TYPES, d)
-        self.lane_mlp = mlp(4, d, d)
-        self.lane_type_emb = nn.Embedding(self.N_LANE_TYPES, d)
-        self.intersection_emb = nn.Embedding(2, d)
+        self.use_map = use_map
+        if use_map:
+            self.lane_mlp = mlp(4, d, d)
+            self.lane_type_emb = nn.Embedding(self.N_LANE_TYPES, d)
+            self.intersection_emb = nn.Embedding(2, d)
 
         def layer(cls):
             return cls(d, heads, ffn, dropout, batch_first=True, norm_first=True)
@@ -137,9 +141,11 @@ class TransformerForecaster(nn.Module):
 
     def forward(self, batch):
         """batch: dict of SCENE_FIELDS tensors -> trajectories (B, K, 60, 2), logits (B, K)."""
-        tokens = torch.cat([self.encode_agents(batch["agents"], batch["agent_valid"], batch["agent_type"]),
-                            self.encode_lanes(batch["lanes"], batch["lane_type"], batch["lane_intersection"])], dim=1)
-        pad = torch.cat([batch["agent_type"] < 0, batch["lane_type"] < 0], dim=1)
+        tokens = self.encode_agents(batch["agents"], batch["agent_valid"], batch["agent_type"])
+        pad = batch["agent_type"] < 0
+        if self.use_map:
+            tokens = torch.cat([tokens, self.encode_lanes(batch["lanes"], batch["lane_type"], batch["lane_intersection"])], dim=1)
+            pad = torch.cat([pad, batch["lane_type"] < 0], dim=1)
         scene = self.encoder(tokens, src_key_padding_mask=pad)
         queries = scene[:, 0:1] + self.mode_emb
         modes = self.decoder(queries, scene, memory_key_padding_mask=pad)  # (B, K, d)
