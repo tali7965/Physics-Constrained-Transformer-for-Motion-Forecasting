@@ -1,0 +1,29 @@
+# Phase 5 step 0: physics head with per-step controls, on the 10% subset for 30 epochs as in the
+# Phase 4 lr sweep, train.seed 1.
+name: step0-physics-seed1
+
+# Train / dev protocol: identical to configs/lstm.yaml, so both models see the same rows.
+protocol:
+  seed: 0
+  dev_size: 5000
+  subset_size: 50000
+  fraction: 0.1
+
+model:
+  type: transformer
+  d: 128
+  heads: 8
+  encoder_layers: 4
+  decoder_layers: 2
+  ffn: 512
+  dropout: 0.1
+  modes: 6
+  head: physics
+
+train:
+  epochs: 30
+  batch_size: 64
+  lr: 3.0e-4
+  grad_clip: 1.0
+  seed: 1
+  select: brier-minFDE@6   # dev metric for best.pt (K=6, the leaderboard metric)

@@ -84,18 +84,24 @@ class TransformerForecaster(nn.Module):
 
     head="physics" makes traj_head output 60 bounded (acceleration, steering) controls instead,
     rolled out through the kinematic model in physics.py from the focal agent's t=49 state, so every
-    mode is drivable by construction.
+    mode is drivable by construction. control_step > 1 makes it output controls only at knots every
+    control_step steps, linearly interpolated in between.
     """
 
     POS_SCALE, VEL_SCALE = LSTMForecaster.POS_SCALE, LSTMForecaster.VEL_SCALE
     N_OBJECT_TYPES, N_LANE_TYPES = 10, 3
 
     def __init__(self, d=128, heads=8, encoder_layers=4, decoder_layers=2, ffn=512, dropout=0.1, modes=6,
-                 head="coordinate"):
+                 head="coordinate", control_step=1):
         super().__init__()
         if head not in ("coordinate", "physics"):
             raise ValueError(f"unknown head {head!r}")
+        if control_step > 1 and head != "physics":
+            raise ValueError("control_step applies to the physics head only")
         self.head = head
+        self.n_out = FUTURE // control_step + 1 if control_step > 1 else FUTURE
+        if control_step > 1:
+            self.register_buffer("knot_weights", physics.interpolation(control_step), persistent=False)
         self.agent_in = nn.Linear(6, d)
         self.time_emb = nn.Parameter(torch.zeros(HISTORY, d))
         self.agent_mlp = nn.Sequential(nn.LayerNorm(d), nn.ReLU(), nn.Linear(d, d))
@@ -111,7 +117,7 @@ class TransformerForecaster(nn.Module):
                                              norm=nn.LayerNorm(d), enable_nested_tensor=False)
         self.mode_emb = nn.Parameter(torch.randn(modes, d))  # token scale, so the K queries start distinct
         self.decoder = nn.TransformerDecoder(layer(nn.TransformerDecoderLayer), decoder_layers, norm=nn.LayerNorm(d))
-        self.traj_head = mlp(d, 2 * d, FUTURE * 2)
+        self.traj_head = mlp(d, 2 * d, self.n_out * 2)
         self.score_head = nn.Linear(d, 1)
         nn.init.normal_(self.time_emb, std=0.02)
 
@@ -137,10 +143,13 @@ class TransformerForecaster(nn.Module):
         scene = self.encoder(tokens, src_key_padding_mask=pad)
         queries = scene[:, 0:1] + self.mode_emb
         modes = self.decoder(queries, scene, memory_key_padding_mask=pad)  # (B, K, d)
-        out = self.traj_head(modes).unflatten(-1, (FUTURE, 2))
+        out = self.traj_head(modes).unflatten(-1, (self.n_out, 2))
         if self.head == "physics":
             pos, heading, speed = physics.initial_state(batch["agents"][:, 0, None])  # (B, 1): shared by the K modes
-            traj = physics.rollout(pos, heading, speed, physics.bound(out))
+            controls = physics.bound(out)
+            if self.n_out != FUTURE:
+                controls = physics.interpolate(controls, self.knot_weights)
+            traj = physics.rollout(pos, heading, speed, controls)
         else:
             traj = out * self.POS_SCALE
         return traj, self.score_head(modes).squeeze(-1)
