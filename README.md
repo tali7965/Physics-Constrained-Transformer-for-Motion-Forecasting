@@ -18,7 +18,8 @@ Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=
 beats the LSTM on every metric (see Results).
 Phase 4 (physics-constrained decoder) — complete: it trains stably and every predicted trajectory is
 feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
-Phase 5 (experiments) is next.
+Phase 5 (experiments) — in progress: step 0, a diagnosis of the physics head's accuracy gap, is
+complete. A fix with smoother controls was tested and not adopted (see Results).
 
 ## Setup
 
@@ -337,4 +338,69 @@ python src/physics.py --check --n 2000
 python src/train.py --config configs/physics.yaml
 python src/evaluate.py --checkpoint outputs/runs/physics/best.pt
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics/best.pt
+```
+
+### Physics-head diagnosis
+
+Before the Phase 5 experiments, `src/diagnose.py` compared the two heads' best checkpoints on the dev
+rows (val stays for reporting).
+
+**Pedestrians are not the cause.** On val the gap is as large for vehicle-like agents (brier-minFDE
+3.28 against 2.64) as for all focal agents (3.16 against 2.57). Off-road is measured for
+vehicle-like agents only.
+
+**Late controls get little gradient.** The table shows the mean |gradient| that the training loss
+sends to the head's outputs in each 1 s band of the future, relative to the mean over all 60 steps:
+
+| | 0–1 s | 1–2 s | 2–3 s | 3–4 s | 4–5 s | 5–6 s |
+| --- | --- | --- | --- | --- | --- | --- |
+| Coordinate head, x | 1.00 | 1.01 | 1.03 | 1.02 | 0.98 | 0.96 |
+| Physics head, acceleration | 2.47 | 1.96 | 0.98 | 0.44 | 0.11 | 0.04 |
+| Physics head, steering | 2.50 | 1.46 | 1.06 | 0.69 | 0.24 | 0.04 |
+
+A control moves every later position, so controls in the first second get about 60 times the
+gradient of those in the last.
+
+**The acceleration chatters at its bounds.** 31% of the most probable mode's accelerations are
+within 5% of ±8 m/s² (55% in the last 2 s), against 6% of steering values. In the first 4 s the
+acceleration changes sign at 57–80% of steps, where a smooth control would rarely change sign at
+all. The head builds its speed profile from a saturated zigzag whose 1 s average is close to the
+ground truth's (median |a| 0.88 against 0.61 m/s²). Where tanh saturates, almost no gradient passes.
+
+**The gap is spread over speeds and the horizon.** Binned by initial speed, the K=6 minFDE gap is
+0.26 m for stationary agents and 0.6–0.8 m at every moving speed (1.2 m above 15 m/s). The off-road
+excess also appears at every moving speed (3.4–7.9% against 1.6–1.9%). The initial heading is not
+the cause: at every moving speed, the last-step heading the head starts from is closer to the first
+ground-truth step than the recorded heading is (median 0.1–0.7° against 0.6–2.8°). The best-mode
+error gap grows steadily with the horizon: 0.16 m at 3 s, 0.46 m at 5 s, 0.54 m at 5.4 s and 0.65 m
+at 6 s.
+
+**The ground truth slows down in its last 0.7 s.** In the raw scenario parquets too, the focal
+agent's positions decelerate sharply at the end of the scenario while its recorded velocity does
+not. On the dev rows, the vehicle-like speed computed from position differences falls from
+7.7 m/s at future step 53 to 3.6 m/s at step 59, while the recorded speed stays at
+about 7.3 m/s. That is an apparent −8.6 m/s² at the last step. The benchmark scores every model
+against these positions. A coordinate head can copy the artifact, but the physics head would have to
+brake at its bound to follow it, and 55% of its last-second accelerations sit at the bound. The
+artifact adds only about 0.1 m to the gap, though: the gap grows at the same rate over the final
+0.6 s as before it.
+
+**Controls at 0.5 s knots do not help.** `model.control_step: 5` makes the head output controls at
+13 knots, 0.5 s apart, linearly interpolated in between. This rules out step-to-step chatter by
+construction, and it raises the vehicle-like FDE fitting floor only from 0.16 m to 0.17 m. Results on
+the 10% subset (30 epochs, all runs at the same commit):
+
+| Head | lr | Dev brier-minFDE, seed 0 | Seed 1 | Off-road @1, seed 0 / 1 |
+| --- | --- | --- | --- | --- |
+| Per-step controls | 3e-4 | **4.28** | **4.13** | **8.6% / 8.0%** |
+| Knots every 0.5 s | 3e-4 | 4.41 | 4.21 | 9.3% / 9.7% |
+| Knots every 0.5 s | 1e-3 | 5.98 | | 9.6% |
+
+The knots are behind at both seeds. They remove the step-to-step chatter but not the gradient
+imbalance, which comes from integration itself. Phase 5 keeps the per-step physics head of Phase 4.
+
+```bash
+python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
+python src/physics.py --check --n 2000 --control-step 5
+python src/train.py --config configs/phase5/step0-knots-seed0.yaml
 ```

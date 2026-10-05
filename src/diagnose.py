@@ -3,15 +3,21 @@
 Usage:
     python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
 
-Three checks, all on dev (val is kept for reporting):
+Checks, all on dev (val is kept for reporting):
     saturation    share of bounded controls near their limits (|tanh| > 0.95), per control and per
-                  1 s band of the future, for the most probable mode and over all modes
+                  1 s band of the future, for the most probable mode and over all modes; how often the
+                  most probable mode's acceleration changes sign between steps, and its 1 s moving
+                  average against the ground truth's
     conditioning  mean |d loss / d traj_head output| per 1 s band under the training loss, relative
                   to its mean over all 60 steps, for both heads (a control at step k moves every
                   later position, so early steps may dominate)
     speed bins    minFDE@6 and brier-minFDE@6 of both heads by the focal agent's initial speed, and
                   for vehicle-like agents the off-road share of the most probable mode and the
                   initial-heading error against the first ground-truth step
+    horizon       best-of-6 displacement error of both heads at several future steps (the best mode
+                  picked at that step)
+    ground truth  vehicle-like speed from position differences against the recorded speed, near
+                  the end of the future, where the positions slow down but the velocity does not
 """
 
 import argparse
@@ -24,11 +30,13 @@ from evaluate import load_checkpoint, off_road, predict
 from metrics import forecast_metrics
 from models import pick_device, scene_batch
 import physics
-from preprocess import FUTURE
+from preprocess import DT, FUTURE
 from train import wta_loss
 
 BANDS = [(i, i + 10) for i in range(0, FUTURE, 10)]  # 1 s bands of the 60 future steps
 SPEED_EDGES = [0.0, physics.MIN_SPEED, 2.0, 5.0, 10.0, 15.0, np.inf]  # m/s
+HORIZON_STEPS = (29, 39, 49, 53, 59)  # 3.0, 4.0, 5.0, 5.4, 6.0 s
+ARTIFACT_STEPS = (0, 30, 50, 53, 55, 57, 59)
 
 
 def capture(model):
@@ -54,11 +62,22 @@ def scatter(flags, mask):
 
 
 def band_row(values):
-    """values (60,) -> one entry per 1 s band."""
-    return "  ".join(f"{values[a:b].mean():7.3f}" for a, b in BANDS)
+    """values (60,) -> one entry per 1 s band, ignoring NaN."""
+    return "  ".join(f"{np.nanmean(values[a:b]):7.3f}" for a, b in BANDS)
 
 
-def saturation(raw, prob):
+def gt_speed(dev):
+    """Ground-truth speed per future step (N, 60): from position differences (the step ending at
+    each future point, the first from t=49) and recorded."""
+    pts = np.concatenate([dev["history"][:, -1:, :2], dev["target"][..., :2]], axis=1)
+    return np.linalg.norm(np.diff(pts, axis=1), axis=-1) / DT, np.linalg.norm(dev["target"][..., 2:4], axis=-1)
+
+
+def moving_average(x, n=10):
+    return np.apply_along_axis(lambda r: np.convolve(r, np.ones(n) / n, "valid"), 1, x)
+
+
+def saturation(raw, prob, dev):
     raw = raw.unflatten(-1, (FUTURE, 2)).numpy()  # (N, K, 60, 2)
     near = np.abs(np.tanh(raw)) > 0.95
     top = np.argmax(prob, axis=1)
@@ -68,6 +87,13 @@ def saturation(raw, prob):
         for label, flags in (("top mode", near[np.arange(len(top)), top, :, c]), ("all modes", near[..., c])):
             per_step = flags.reshape(-1, FUTURE).mean(axis=0)
             print(f"{name:12s} {label:9s} {band_row(per_step)}   {flags.mean():7.3f}")
+
+    accel = physics.A_MAX * np.tanh(raw[np.arange(len(top)), top, :, 0])  # (N, 60), most probable mode
+    change = np.sign(accel[:, 1:]) != np.sign(accel[:, :-1])  # step k-1 -> k, for k = 1..59
+    print(f"{'accel sign changes':22s} {band_row(np.r_[np.nan, change.mean(axis=0)])}   {change.mean():7.3f}")
+    gt_accel = np.diff(gt_speed(dev)[0], axis=1) / DT  # (N, 59)
+    print(f"1 s moving average of acceleration, median |a|: top mode {np.median(np.abs(moving_average(accel))):.2f}, "
+          f"ground truth {np.median(np.abs(moving_average(gt_accel))):.2f} m/s^2")
 
 
 def conditioning(model, store, dev, device, batches, batch_size):
@@ -110,7 +136,7 @@ def main():
         pred, prob = predict(model, dev, device)
         results[name] = (pred, prob, forecast_metrics(pred, prob, gt, 6))
         if name == "physics":
-            saturation(torch.cat(store["outputs"]), prob)
+            saturation(torch.cat(store["outputs"]), prob, dev)
         grads[name] = conditioning(model, store, dev, device, args.batches, args.batch_size)
 
     header = "  ".join(f"{a / 10:.0f}-{b / 10:.0f} s".rjust(7) for a, b in BANDS)
@@ -156,6 +182,19 @@ def main():
         print(f"{f'{lo:g}-{hi:g}':>11} {m.sum():5d} {mv.sum():5d}  {fde_c:9.2f} {fde_p:9.2f} {fde_p - fde_c:6.2f}  "
               f"{br_c:11.2f} {br_p:10.2f} {br_p - br_c:6.2f}  {off[0]:9.1%} {off[1]:9.1%} {off[2]:7.1%}  "
               f"{hu[0]:7.1f}/{hu[1]:7.1f} {hr[0]:7.1f}/{hr[1]:7.1f}")
+
+    print("\nhorizon: best-of-6 displacement error at future step (mode picked at that step), all focal")
+    err = {name: np.linalg.norm(pred - gt[:, None], axis=-1).min(axis=1).mean(axis=0) for name, (pred, _, _) in results.items()}
+    for k in HORIZON_STEPS:
+        print(f"  {(k + 1) * DT:.1f} s  coordinate {err['coordinate'][k]:.2f}  physics {err['physics'][k]:.2f}  "
+              f"gap {err['physics'][k] - err['coordinate'][k]:.2f}")
+
+    v_pos, v_rec = gt_speed(dev)
+    a_pos = np.diff(v_pos, axis=1) / DT
+    print("\nground truth near the end of the future, vehicle-like means")
+    for k in ARTIFACT_STEPS:
+        accel = f"  accel from positions {a_pos[veh, k - 1].mean():6.2f} m/s^2 (|a| p95 {np.percentile(np.abs(a_pos[veh, k - 1]), 95):.2f})" if k else ""
+        print(f"  step {k:2d}: speed from positions {v_pos[veh, k].mean():5.2f}  recorded {v_rec[veh, k].mean():5.2f} m/s{accel}")
 
 
 if __name__ == "__main__":
