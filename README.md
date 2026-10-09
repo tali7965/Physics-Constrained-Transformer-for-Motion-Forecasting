@@ -18,8 +18,9 @@ Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=
 beats the LSTM on every metric (see Results).
 Phase 4 (physics-constrained decoder) — complete: it trains stably and every predicted trajectory is
 feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
-Phase 5 (experiments) — in progress: step 0, a diagnosis of the physics head's accuracy gap, is
-complete. A fix with smoother controls was tested and not adopted (see Results).
+Phase 5 (experiments) — complete: seeds, data efficiency, map and K ablations, and a diagnosis of
+the off-road excess. The physics head stays behind by 0.4–0.7 m brier-minFDE in every setting. The
+leaderboard entry was dropped because the challenge had closed, so results are on val (see Results).
 
 ## Setup
 
@@ -52,7 +53,7 @@ src/models.py             constant-velocity baseline, LSTM encoder-decoder, Tran
 src/physics.py            differentiable kinematic bicycle model, control fitting to ground truth
 src/train.py              training loop (ADE or winner-takes-all loss), dev-set model selection
 src/evaluate.py           score a model on val (or dev), incl. off-road, and write outputs/results/
-src/diagnose.py           compare the physics and coordinate heads on dev (Phase 5 step 0)
+src/diagnose.py           compare the physics and coordinate heads on dev: accuracy gap and off-road causes
 src/submit.py             leaderboard submission file for the focal agent, with an end-to-end check on val
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
@@ -406,4 +407,136 @@ imbalance, which comes from integration itself. Phase 5 keeps the per-step physi
 python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
 python src/physics.py --check --n 2000 --control-step 5
 python src/train.py --config configs/phase5/step0-knots-seed0.yaml
+```
+
+### Phase 5 experiments
+
+Each run changes one setting of the Phase 3 (coordinate head) or Phase 4 (physics head) configuration.
+The head keeps its own learning rate (1e-3 and 3e-4), and `best.pt` is selected on dev; the configs
+are in `configs/phase5/`. The 100%, seed-0, K=6 rows are the Phase 3 and Phase 4 runs. The 12 new
+runs were trained at commit d3c39e0, whose evaluation reproduces the Phase 3 and 4 val numbers
+exactly; together they took 34 h on the M4.
+
+All numbers are on val. Each cell reads *coordinate head / physics head*, with the better one in bold.
+brier-minFDE and minFDE are over all focal agents, and off-road is for the most probable mode of
+vehicle-like agents.
+
+**Seeds** — 100% of the training subset, K=6:
+
+| Seed | brier-minFDE | minFDE, K=6 | minFDE, K=1 | Vehicle-like brier-minFDE | Off-road @1 |
+| --- | --- | --- | --- | --- | --- |
+| 0 | **2.57** / 3.16 | **1.94** / 2.55 | **6.09** / 6.95 | **2.64** / 3.28 | **1.5%** / 5.2% |
+| 1 | **2.56** / 3.18 | **1.93** / 2.57 | **6.10** / 7.09 | **2.63** / 3.30 | **1.6%** / 5.9% |
+
+Between seeds, each head's brier-minFDE moves by at most 0.016. The gap between the heads is 0.59
+and 0.62, about 40 times that. The physics head's K=1 minFDE (by 0.14) and its off-road share
+(by 0.8 points) vary more between seeds, but the off-road share stays more than three times the
+coordinate head's.
+
+**Data efficiency** — 10%, 25% and 100% of the training subset. Every run gets about 23.5k gradient
+steps, with dev checked about every 790 steps, so the smaller subsets get more epochs rather than
+less training:
+
+| Training scenes | Epochs | brier-minFDE | minFDE, K=6 | minFDE, K=1 | Vehicle-like brier-minFDE | Off-road @1 | `best.pt` epoch |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 5,000 (10%) | 300 | **3.33** / 3.98 | **2.67** / 3.37 | 8.62 / **8.51** | **3.42** / 4.16 | **4.1%** / 8.1% | 130 / 80 |
+| 12,500 (25%) | 120 | **2.88** / 3.61 | **2.24** / 3.00 | **6.93** / 8.27 | **2.96** / 3.76 | **2.3%** / 7.9% | 100 / 48 |
+| 50,000 (100%) | 30 | **2.57** / 3.16 | **1.94** / 2.55 | **6.09** / 6.95 | **2.64** / 3.28 | **1.5%** / 5.2% | 30 / 28 |
+
+The physical prior does not help more when data is short. The brier-minFDE gap is 0.66 at 10%,
+0.73 at 25% and 0.59 at 100% (20–25% of the coordinate head's error), and the physics head trained
+on 50,000 scenes (3.16) is behind the coordinate head trained on 12,500 (2.88). The one exception
+is the most probable mode at 10%, where the physics head is slightly ahead (K=1 minADE 3.31 against
+3.47, minFDE 8.51 against 8.62).
+
+Both heads overfit the smaller subsets, so those val numbers come from early `best.pt` epochs. The
+physics head overfits earlier and further. At 10% its dev brier-minFDE rises from 4.02 at epoch 80
+to 5.25 at epoch 300, while the coordinate head's rises from 3.39 at epoch 130 to 3.68. Its train
+ADE then falls to 0.73 (coordinate head 0.74), far below the 1.18 where the 100% physics run ends.
+Given enough passes, it fits its training scenes as closely as the coordinate head. That is
+consistent with the Phase 4 reading that it underfits because it optimises slowly, not because it
+cannot express the futures.
+
+**Map** — 100%, K=6, with the lane tokens removed so that the encoder sees only the agents:
+
+| Map | brier-minFDE | minFDE, K=6 | minFDE, K=1 | Vehicle-like brier-minFDE | Off-road @1 | Run time |
+| --- | --- | --- | --- | --- | --- | --- |
+| yes | **2.57** / 3.16 | **1.94** / 2.55 | **6.09** / 6.95 | **2.64** / 3.28 | **1.5%** / 5.2% | 3.1 / 3.3 h |
+| no | **3.18** / 3.58 | **2.55** / 2.97 | **7.50** / 7.90 | **3.29** / 3.73 | **4.0%** / 7.1% | 1.1 / 1.2 h |
+
+The map is worth 0.60 brier-minFDE to the coordinate head and 0.42 to the physics head. Without it
+the gap shrinks to 0.41 but does not close, so a weaker use of the map explains only part of the
+physics head's deficit. Even with the map, the physics head leaves the drivable area more often
+(5.2%) than the coordinate head does without one (4.0%). Removing the lane tokens cuts the run time
+to about a third.
+
+**Number of modes** — 100%, trained and scored with K = 1, 3 or 6 modes. `best.pt` is selected by
+dev minFDE for K=1 and by dev brier-minFDE at the model's own K otherwise:
+
+| K | brier-minFDE@K | minFDE@K | minFDE, K=1 | Vehicle-like brier-minFDE@K | Off-road @1 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **5.19** / 5.81 | **5.19** / 5.81 | **5.19** / 5.81 | **5.44** / 6.12 | **2.0%** / 4.6% |
+| 3 | **3.17** / 3.72 | **2.77** / 3.33 | **5.92** / 6.49 | **3.28** / 3.88 | **1.6%** / 4.7% |
+| 6 | **2.57** / 3.16 | **1.94** / 2.55 | **6.09** / 6.95 | **2.64** / 3.28 | **1.5%** / 5.2% |
+
+The gap is 0.62, 0.54 and 0.59 at K = 1, 3 and 6, so it does not depend on the number of modes. A
+model trained with a single mode predicts better than a K=6 model's most probable mode (5.19
+against 6.09 for the coordinate head, 5.81 against 6.95 for the physics head). This points again
+at mode scoring as the weak spot of the K=6 models.
+
+**Feasibility** — the physics head is 0.00% infeasible at 10 Hz and at 2 Hz in every run. At 2 Hz the
+coordinate head is at most 0.01% infeasible in every run, against 0.41% for the ground truth. At
+10 Hz its most probable mode is infeasible for 55–61% of trajectories at 100% of the data, 70% at
+25% and 97% at 10%, so its step-to-step jitter grows as the training set shrinks.
+
+**Why the physics head leaves the road** — `src/diagnose.py` on the dev rows, for the most probable
+mode of the 4,636 vehicle-like agents. Off-road there is 5.2% for the physics head, 1.6% for the
+coordinate head and 0.2% for the ground truth.
+
+- *Not the control chatter.* Re-rolling the physics head's own controls after a 1 s moving average
+  gives 5.0% off-road, and removing its steering in the last second gives 5.5%.
+- *Mostly in turns.* Futures whose heading changes by 10° or more (first against last 1 s chord) are
+  19% of the scenes but 62% of the physics head's off-road modes. There it leaves the road 15–18%
+  of the time, against 5–7% for the coordinate head. Its most probable mode turns less (median 0.85
+  of the ground truth's heading change, against 0.92), and 61% of its off-road modes in turns end on
+  the outside of the turn (coordinate head 55%). The bounds allow the turn, though: its best mode
+  turns as far as the coordinate head's (0.92 against 0.94). In the turns where it leaves the road,
+  its steering is at the bound in 18% of steps, against 15% in turns where it stays on.
+- *On straight roads, it keeps its starting heading.* Step 0 showed that the last-step direction is
+  the better of the two starting headings. But over the first second, the physics head's most
+  probable mode keeps 94% of that direction's error against the ground truth's first-second
+  direction, while the coordinate head keeps 3%. For straight futures, the physics head's off-road
+  share rises with that error from 1.2% (below 1°) to 18.4% (4° or more), against 0.2% to 2.4%.
+- *Its sideways misses leave the road more often.* When the most probable mode's endpoint is more
+  than 2 m to the side of the ground truth's, the physics head is off-road 2–3 times as often as the
+  coordinate head with the same miss: 10.6% against 5.5% at 2–4 m, and 28.3% against 9.2% beyond
+  4 m. It also misses by that much more often (1,007 scenes against 657). Below 1 m, it is not worse
+  (0.3% for both below 0.5 m).
+
+The off-road excess comes from errors that run across the lane rather than along it: a starting
+heading the head does not correct, or a turn it does not complete.
+
+**Research questions** — what these runs answer:
+
+1. *Accuracy.* The physics-constrained decoder does not match the coordinate decoder. Its
+   brier-minFDE is behind in every setting, by 0.41–0.73, far more than the seed spread. The only
+   metrics it wins are those of the most probable mode at 10% of the data.
+2. *Feasibility.* The coordinate head's trajectories are infeasible only at 10 Hz, from
+   step-to-step jitter. At 2 Hz they are as feasible as the physics head's. The physics head
+   removes the jitter, but it leaves the drivable area 1.8–3.7 times as often.
+3. *Data efficiency.* The physical prior does not help more with less data: the gap is about the
+   same at 10%, 25% and 100% of the training subset.
+
+**Leaderboard** — the single-agent phase of the Argoverse 2 challenge on EvalAI (challenge 1719)
+stopped accepting submissions on 2025-10-31, so no test results are reported. `src/submit.py` still
+writes a valid submission file. Read back through av2's `ChallengeSubmission` and scored with av2's
+own metrics on 2,000 val scenarios, it matches `src/metrics.py` to within 1e-8 m.
+
+```bash
+python src/train.py --config configs/phase5/physics-f10.yaml        # one config per run in configs/phase5/
+python src/evaluate.py --checkpoint outputs/runs/physics-f10/best.pt
+python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
+python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics-k1/best.pt
+python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split val --limit 2000   # pipeline check
+python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split test
 ```
