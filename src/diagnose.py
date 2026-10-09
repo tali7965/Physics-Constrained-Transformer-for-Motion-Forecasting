@@ -183,6 +183,15 @@ def off_road_causes(results, raw, road, dev, rows):
     for name, m in classes.items():
         print(f"{name:14s} {m.sum():5d}  {off['coordinate'][m].mean():6.1%} {off['physics'][m].mean():6.1%} "
               f"{off['ground truth'][m].mean():6.1%}  {(off['physics'] & m).sum() / off['physics'].sum():35.1%}")
+    acc = {name: {**{f"{k}@6": v[veh] for k, v in results[name][2].items()},
+                  "minFDE@1": forecast_metrics(results[name][0][veh], results[name][1][veh], gt, 1)["minFDE"]}
+           for name in pred}
+    print("accuracy by the same classes, coordinate / physics")
+    print(f"{'':14s} {'n':>5}  {'brier-minFDE@6':>15} {'minFDE@6':>15} {'minFDE@1':>15}")
+    for name, m in classes.items():
+        cells = [f"{acc['coordinate'][k][m].mean():6.2f} / {acc['physics'][k][m].mean():6.2f}"
+                 for k in ("brier-minFDE@6", "minFDE@6", "minFDE@1")]
+        print(f"{name:14s} {m.sum():5d}  " + "  ".join(cells))
 
     # Turns: how far each head turns, and on which side of the ground truth's end it stops.
     t = classes[f"turn >={TURN_DEG:g}"]
