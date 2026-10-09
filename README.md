@@ -1,6 +1,7 @@
 # Physics-Constrained Transformer for Motion Forecasting
 
-**Author:** Ali Taheri
+**Author:** Ali Taheri · **Report:** [report/report.pdf](report/report.pdf) ·
+**Weights:** [v1.0 release](https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/tag/v1.0) · **License:** [MIT](LICENSE) (code)
 
 Vehicle trajectory forecasting on [Argoverse 2](https://www.argoverse.org/av2.html). Instead of
 regressing raw `(x, y)` coordinates, the model predicts **control inputs** (acceleration, curvature)
@@ -10,21 +11,39 @@ trajectory is kinematically drivable by construction.
 The central experiment compares this physics-constrained decoder against an unconstrained coordinate
 decoder on accuracy, trajectory feasibility, and data efficiency.
 
-**Report:** [report/report.pdf](report/report.pdf) is a 5-page write-up of the method, results and
-diagnosis.
+![Three dev scenes with both heads' predicted modes unrolling over 6 s](assets/examples.gif)
 
-## Status
+*Three dev scenes, each drawn at random from those that meet its condition: (a) a turn both heads
+get right, (b) a turn the physics head under-turns, leaving the road, and (c) a straight road where it
+keeps a 4.1° error in its starting heading. Top row: coordinate head; bottom row: physics head. Thick
+lines are the most probable modes, and × marks the first off-road point.*
 
-Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
-Phase 2 (Baselines) — complete: metrics, constant-velocity and LSTM baselines (see Results).
-Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=6 coordinate decoder
-beats the LSTM on every metric (see Results).
-Phase 4 (physics-constrained decoder) — complete: it trains stably and every predicted trajectory is
-feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
-Phase 5 (experiments) — complete: seeds, data efficiency, map and K ablations, and a diagnosis of
-the off-road excess. The physics head stays behind by 0.4–0.7 m brier-minFDE in every setting. The
-leaderboard entry was dropped because the challenge had closed, so results are on val (see Results).
-Phase 6 (analysis and write-up) — in progress: the technical report is in `report/`.
+## Results at a glance
+
+On the Argoverse 2 validation split (24,988 scenarios). Both models share one 1.43M-parameter
+Transformer encoder, training protocol and selection rule; only the output head differs. Infeasible
+and off-road are for the most probable mode of vehicle-like agents (23,113).
+
+| Head | brier-minFDE | minFDE, K=6 | MR, K=6 | minFDE, K=1 | Infeasible, 10 Hz / 2 Hz | Off-road |
+| --- | --- | --- | --- | --- | --- | --- |
+| Coordinate: 60 positions | **2.57** | **1.94** | **0.303** | **6.09** | 57.8% / 0.00% | **1.5%** |
+| Physics: bounded controls, bicycle model | 3.16 | 2.55 | 0.431 | 6.95 | **0.00% / 0.00%** | 5.2% |
+| Ground truth | | | | | 2.93% / 0.41% | 0.19% |
+
+- **Accuracy:** the physics head is behind in every setting tested by 0.41–0.73 m brier-minFDE,
+  about 40 times the seed-to-seed spread. The settings are two seeds; 10%, 25% and 100% of the
+  training subset; with and without the map; and K = 1, 3 and 6.
+- **Feasibility:** the coordinate head's infeasibility is step-to-step jitter. Resampled to 2 Hz,
+  its paths are as feasible as the ground truth's. The physics head is feasible by construction, but
+  it leaves the drivable area more than three times as often.
+- **Data efficiency:** the physical prior does not help more with less data: the gap at 10% of the
+  training subset is about the same as at 100%.
+- **Why:** integration gives the first second's controls about 60 times the gradient of the last
+  second's. The off-road excess comes from errors across the lane: a starting heading the head does
+  not correct, and turns it does not complete.
+
+Every number has its reproduction command in the development log below. The
+[report](report/report.pdf) gives the method and analysis in five pages.
 
 ## Setup
 
@@ -60,7 +79,9 @@ src/evaluate.py           score a model on val (or dev), incl. off-road, and wri
 src/diagnose.py           compare the physics and coordinate heads on dev: accuracy gap and off-road causes
 src/submit.py             leaderboard submission file for the focal agent, with an end-to-end check on val
 src/figures.py            the report's figures, from the results and checkpoints
+src/animate.py            the README animation (assets/examples.gif)
 report/                   technical report: LaTeX source, figures and the built PDF
+assets/                   README media
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```
@@ -88,8 +109,8 @@ source .venv/bin/activate
 
 python src/download.py --split val --limit 100      # quick sanity check (~25 MB)
 python src/download.py --split val                  # full val, for evaluation
-python src/download.py --split test                 # full test, for the leaderboard
-python src/download.py --split train --limit 20000  # training subset (~4.8 GB)
+python src/download.py --split test                 # full test, for submission files
+python src/download.py --split train                # full train (47 GB): the training subset is drawn from all of it
 ```
 
 Scenarios land in `<data_root>/raw/<split>/<scenario-id>/`. The script is resumable: re-running
@@ -97,7 +118,66 @@ skips anything already complete and verifies every scenario on disk before repor
 `--limit` a whole split is fetched. The first run for each split lists the bucket and caches the
 scenario ids under `<data_root>/raw/manifests/` (train takes a few minutes to list).
 
-## Data
+## Pretrained weights
+
+The [v1.0 release](https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/tag/v1.0) holds the two checkpoints behind the table above (5.8 MB
+each). They are under the Argoverse 2 terms, for non-commercial use (see License).
+
+```bash
+mkdir -p weights
+curl -L -o weights/transformer.pt https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/download/v1.0/transformer.pt
+curl -L -o weights/physics.pt https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/download/v1.0/physics.pt
+python src/evaluate.py --checkpoint weights/transformer.pt      # needs the preprocessed val split
+python src/visualize.py --split val --random 6 --seed 0 --checkpoint weights/physics.pt
+```
+
+## Reproduce
+
+These steps produce every number in this README and in the report. The training subset and the dev
+set are drawn from the whole train split, so all of it must be downloaded and preprocessed (47 GB
+raw, 16 GB processed).
+
+```bash
+python src/download.py --split train                   # and --split val (see Downloading the data)
+python src/preprocess.py --split train                 # and --split val
+python src/train.py --config configs/transformer.yaml  # coordinate head, 3.1 h on an M4 laptop
+python src/train.py --config configs/physics.yaml      # physics head, 3.3 h
+python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
+python src/evaluate.py --checkpoint outputs/runs/physics/best.pt
+python src/train.py --config configs/phase5/physics-f10.yaml   # each of the 12 ablation configs, ~34 h in all
+python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
+python src/figures.py                                  # report figures
+python src/animate.py                                  # README animation
+cd report && latexmk -pdf report.tex
+```
+
+## License
+
+The code is under the [MIT license](LICENSE). The Argoverse 2 data is © 2021 Argo AI, LLC, licensed
+under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) for non-commercial use.
+The pretrained weights, the figures, the animation and the report's plots are derived from it and
+fall under the same terms.
+
+## Development log
+
+The project ran in six phases, each planned once the previous one had closed. The sections below
+record what was measured and decided, in order, with the commands that produce each number.
+
+### Status
+
+Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
+Phase 2 (Baselines) — complete: metrics, constant-velocity and LSTM baselines (see Results).
+Phase 3 (Transformer model) — complete: a 1.4M-parameter Transformer with a K=6 coordinate decoder
+beats the LSTM on every metric (see Results).
+Phase 4 (physics-constrained decoder) — complete: it trains stably and every predicted trajectory is
+feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
+Phase 5 (experiments) — complete: seeds, data efficiency, map and K ablations, and a diagnosis of
+the off-road excess. The physics head stays behind by 0.4–0.7 m brier-minFDE in every setting. The
+leaderboard entry was dropped because the challenge had closed, so results are on val (see Results).
+Phase 6 (analysis and write-up) — complete: the technical report, its figures, the README animation
+and front page, and the pretrained weights (v1.0 release).
+
+### Data
 
 Measured over the full validation split (24,988 scenarios) with `python src/explore.py --split val`;
 the complete report is written to `outputs/explore_val.txt`.
@@ -125,7 +205,7 @@ palo-alto 5.7%.
 
 **Load cost** — 18 ms per scenario (parquet + map JSON), ~9 min wall time for the whole val split.
 
-## Preprocessing
+### Preprocessing
 
 ```bash
 python src/preprocess.py --split val --limit 200 --workers 1   # quick check
@@ -178,7 +258,7 @@ runs, and two full test runs, produced bit-identical files; re-processing 20 ran
 matches the stored arrays exactly. 143 test parquets store `timestep` as float64 instead of int64;
 the preprocessing casts it and asserts nothing is lost.
 
-## Results
+### Results
 
 **Protocol** — a seeded permutation of the train split gives a fixed *dev* set of 5,000 scenarios,
 used only for model selection, and a fixed *training subset* of 50,000 scenarios. The 10% and 25%
@@ -216,7 +296,7 @@ python src/train.py --config configs/lstm.yaml
 python src/evaluate.py --checkpoint outputs/runs/lstm/best.pt
 ```
 
-### Transformer
+#### Transformer
 
 **Model** — every agent (its 50 history steps) and every lane (the 9 segments of its centerline) is
 encoded PointNet-style into one token: a shared MLP per step or segment, max-pooled, plus type
@@ -270,7 +350,7 @@ python src/evaluate.py --checkpoint outputs/runs/transformer/best.pt
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/transformer/best.pt
 ```
 
-### Physics-constrained decoder
+#### Physics-constrained decoder
 
 **Model** — the Transformer above with only `traj_head` changed: per mode it outputs 60 pairs of
 controls instead of 60 positions, bounded with `tanh` to an acceleration in ±8 m/s² and a steering
@@ -350,7 +430,7 @@ python src/evaluate.py --checkpoint outputs/runs/physics/best.pt
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics/best.pt
 ```
 
-### Physics-head diagnosis
+#### Physics-head diagnosis
 
 Before the Phase 5 experiments, `src/diagnose.py` compared the two heads' best checkpoints on the dev
 rows (val stays for reporting).
@@ -415,7 +495,7 @@ python src/physics.py --check --n 2000 --control-step 5
 python src/train.py --config configs/phase5/step0-knots-seed0.yaml
 ```
 
-### Phase 5 experiments
+#### Phase 5 experiments
 
 Each run changes one setting of the Phase 3 (coordinate head) or Phase 4 (physics head) configuration.
 The head keeps its own learning rate (1e-3 and 3e-4), and `best.pt` is selected on dev; the configs
@@ -547,7 +627,7 @@ python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split val -
 python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split test
 ```
 
-## Report
+### Report
 
 The report in `report/` uses the IEEE conference template. Its numbers come from the val results and
 the dev diagnosis above, and `src/figures.py` regenerates every figure. It needs the best checkpoints
