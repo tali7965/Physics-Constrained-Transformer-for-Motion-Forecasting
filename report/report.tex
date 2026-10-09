@@ -24,7 +24,8 @@ A Kinematic Decoder for Transformer Motion Forecasting on Argoverse~2}
 \begin{abstract}
 Most learned motion forecasters regress future coordinates directly, which allows trajectories that
 no vehicle could drive. We test the alternative of making every prediction drivable by construction.
-A compact Transformer (1.43M parameters) outputs bounded acceleration and steering, which a
+The goal is not the most accurate forecaster, but to build a physically accurate one and measure how
+it performs. A compact Transformer (1.43M parameters) outputs bounded acceleration and steering, which a
 differentiable kinematic bicycle model integrates into positions. We compare it with the same model
 using an unconstrained coordinate decoder, under one protocol on Argoverse~2. The kinematic decoder
 removes every infeasible trajectory but is less accurate: validation brier-minFDE at $K{=}6$ is
@@ -50,7 +51,9 @@ jitter between steps. A long-standing remedy is to predict control inputs instea
 them through a vehicle model~\cite{cui2020dkm,salzmann2020trajectronpp}, so that every output is
 kinematically feasible by construction.
 
-This report measures what that constraint costs and buys in a controlled setting. One Transformer
+The goal of this project is not to build the most accurate forecaster, nor to show that a kinematic
+decoder is the best approach. It is to build a physically accurate model and measure, in a
+controlled setting, what that constraint costs and buys. One Transformer
 encoder is trained twice on Argoverse~2~\cite{wilson2021argoverse2}, and only the output head
 differs. One head regresses 60 future positions. The other outputs 60 bounded
 (acceleration, steering) pairs that a differentiable kinematic bicycle
@@ -76,9 +79,8 @@ The answers are mostly negative for the constrained head, and the reasons are sp
 \textbf{Scene encoders.} VectorNet~\cite{gao2020vectornet} and LaneGCN~\cite{liang2020lanegcn}
 replaced rasterised scenes with vectorised agents and lanes. Transformer forecasters then attend
 jointly over agents, time and map~\cite{ngiam2022scenetransformer,nayakanti2023wayformer,shi2022mtr,zhou2023qcnet}.
-Our encoder follows this line at small scale: one token per agent and per lane, built
-PointNet-style~\cite{qi2017pointnet}, and joint self-attention over all tokens, close to the
-early-fusion variant studied in Wayformer~\cite{nayakanti2023wayformer}.
+Ours is a small instance with PointNet-style~\cite{qi2017pointnet} tokens, close to Wayformer's
+early-fusion variant~\cite{nayakanti2023wayformer}.
 
 \textbf{Multimodal outputs.} Forecasters predict several modes with probabilities and train them
 with a winner-takes-all loss~\cite{guzmanrivera2012mcl}, sometimes around fixed
@@ -118,8 +120,7 @@ embeddings added. A 4-layer pre-norm Transformer encoder~\cite{vaswani2017attent
 There is no slot positional encoding, so the output does not depend on slot order. $K$ mode
 queries, each the focal token plus a learned mode embedding, attend to the scene in a 2-layer
 Transformer decoder. An MLP head maps each mode to a trajectory, and a linear layer gives its
-logit. The model has 1.43M parameters. Mode embeddings must start at the scale of the tokens: at
-standard deviation 0.02 the six queries were nearly identical and the modes collapsed.
+logit. The model has 1.43M parameters.
 
 \subsection{Coordinate and kinematic heads}
 The \emph{coordinate head} is an MLP that outputs 60 positions per mode.
@@ -349,17 +350,26 @@ Lateral miss $\ge 4$\,m & 295 / 516 & 9.2\% & 28.3\% \\
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=\textwidth]{figures/examples.pdf}
+\includegraphics[width=0.94\textwidth]{figures/examples.pdf}
 \caption{Dev scenes, each drawn at random from the scenes that meet its condition. Thick lines are
 the most probable modes. (a)~A turn in which both heads' most probable modes end within 2\,m (one of
 3). (b)~A turn in which the kinematic head's most probable mode turns the right way but only
 25--75\% as far, and leaves the road while the coordinate head's stays on it (one of 19).
 (c)~A straight road on which the kinematic head starts $4.1^\circ$ off the ground truth's direction
-and keeps that heading across the median (one of 21).}
+and keeps that heading across the median (one of 21). Panels (b) and (c) show failure modes, not
+how often they occur: overall, the kinematic head's most probable mode stays on the road in about
+95\% of vehicle-like scenes (5.2\% off-road on both dev and validation).}
 \label{fig:examples}
 \end{figure*}
 
 Table~\ref{tab:offroad} and Fig.~\ref{fig:examples} locate the off-road excess.
+
+\textbf{Drivable is not road-aware.} The bicycle model limits how the vehicle moves, not where it may
+go: a smooth, drivable path can still cross a median. Staying on the road is learned from the map,
+by both heads alike. What the constraint changes is how errors build up. The coordinate head places
+each point directly and can follow the lane's shape point by point. The kinematic head's position is
+the running sum of its controls, so a small early error in heading or steering compounds into a
+smooth drift across the lane.
 
 \textbf{Not the chatter.} Re-rolling the kinematic head's own controls after a 1\,s moving average
 gives 5.0\% off-road instead of 5.2\%. Removing its steering in the last second gives 5.5\%.
@@ -380,7 +390,7 @@ from 1.2\% for $|e_0| < 1^\circ$ to 18.4\% for $|e_0| \ge 4^\circ$ (coordinate h
 
 \textbf{Errors across the lane.} When the most probable mode misses the ground truth's endpoint by
 more than 2\,m sideways, the kinematic head leaves the road 2--3 times as often as the coordinate
-head with the same miss. Its errors run across the lane rather than along it.
+head with the same miss.
 
 \section{Discussion and Limitations}
 
@@ -402,14 +412,11 @@ diagnoses use one checkpoint per head. Off-road depends on the map's drivable-ar
 
 \section{Conclusion}
 
-Integrating bounded controls through a kinematic bicycle model makes every predicted trajectory
-drivable. In a controlled comparison on Argoverse~2, however, it costs accuracy everywhere and does
-not improve data efficiency. The unconstrained decoder's infeasibility turned out to be step-to-step
-jitter rather than infeasible manoeuvres. Integration starves late controls of gradient, and the
-constrained decoder's off-road errors come from an initial heading it does not correct and turns it
-does not complete. Fixing these two issues, rather than adding more constraints, is the natural next
-step for physics-based decoders. Code, configurations and all numbers in this report are available
-at \repo.
+This project set out to build a physically accurate forecaster and measure how it performs, not to
+find the best approach. Integrating bounded controls through a kinematic bicycle model makes every
+trajectory drivable, but on Argoverse~2 it costs 0.4--0.7\,m in every setting and does not improve
+data efficiency. Correcting the initial heading and the slow learning of late controls, rather than
+adding constraints, is the natural next step.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}

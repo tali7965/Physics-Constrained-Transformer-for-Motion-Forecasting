@@ -5,11 +5,17 @@ with two interchangeable decoders. The **coordinate head** regresses future posi
 head** predicts acceleration and steering and integrates them through a differentiable kinematic
 bicycle model, so every trajectory is drivable by construction.
 
+The goal is not the most accurate forecaster. It is to build a physically accurate model and measure
+how it performs against an otherwise identical unconstrained one.
+
 [Technical report (PDF)](report/report.pdf) ·
 [Pretrained weights](https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/tag/v1.0) ·
 [Development log](docs/development-log.md)
 
-![Predicted trajectories of both heads on three validation scenes](assets/examples.gif)
+![Predicted trajectories of both heads on three held-out scenes](assets/examples.gif)
+
+*Top: coordinate head. Bottom: physics head. Panels (b) and (c) show its failure modes. Overall, its
+most probable trajectory stays on the road in about 95% of vehicle scenes.*
 
 ## Results
 
@@ -34,8 +40,12 @@ The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K
   less training data does not narrow the gap.
 - The coordinate head's infeasibility is step-to-step jitter: at 2 Hz its trajectories are as
   feasible as the ground truth.
-- Integration gives early controls about 60× the gradient of late ones. The physics head's off-road
-  errors come from an uncorrected initial heading and incomplete turns.
+- Drivable is not road-aware. The bicycle model limits how the vehicle moves, not where it goes.
+  Because position is the running sum of the controls, small heading or steering errors compound
+  into drifts across the lane: an uncorrected initial heading, or an incomplete turn. That is why the
+  physics head leaves the road more often.
+- Integration also gives early controls about 60× the gradient of late ones, so late steering
+  learns slowly.
 
 ## Installation
 
