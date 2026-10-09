@@ -18,6 +18,12 @@ Checks, all on dev (val is kept for reporting):
                   picked at that step)
     ground truth  vehicle-like speed from position differences against the recorded speed, near
                   the end of the future, where the positions slow down but the velocity does not
+    off-road      where the most probable vehicle-like mode leaves the drivable area: with the
+                  physics head's controls smoothed or its last-second steering removed; by the
+                  ground truth's heading change (first against last 1 s chord) and, in turns, how far
+                  each head turns and on which side it ends; whether the steering is at its bound
+                  there; on straight roads, how much of the initial-heading error each head keeps
+                  over the first second; and at matched lateral endpoint error
 """
 
 import argparse
@@ -37,6 +43,10 @@ BANDS = [(i, i + 10) for i in range(0, FUTURE, 10)]  # 1 s bands of the 60 futur
 SPEED_EDGES = [0.0, physics.MIN_SPEED, 2.0, 5.0, 10.0, 15.0, np.inf]  # m/s
 HORIZON_STEPS = (29, 39, 49, 53, 59)  # 3.0, 4.0, 5.0, 5.4, 6.0 s
 ARTIFACT_STEPS = (0, 30, 50, 53, 55, 57, 59)
+STRAIGHT_DEG, TURN_DEG = 10.0, 30.0  # ground-truth heading change below which a future is straight, above which a turn
+CHORD_M = 1.0  # a 1 s chord shorter than this gives no reliable direction
+HEADING_BINS = [0.0, 1.0, 2.0, 4.0, np.inf]  # |initial-heading error|, degrees
+LATERAL_BINS = [0.0, 0.5, 1.0, 2.0, 4.0, np.inf]  # |lateral endpoint error|, m
 
 
 def capture(model):
@@ -77,6 +87,22 @@ def moving_average(x, n=10):
     return np.apply_along_axis(lambda r: np.convolve(r, np.ones(n) / n, "valid"), 1, x)
 
 
+def smooth(x, n=10):
+    """Centred n-step moving average along axis 1 of (N, T, C), padded with the end values."""
+    pad = np.concatenate([np.repeat(x[:, :1], n // 2, axis=1), x, np.repeat(x[:, -1:], n - 1 - n // 2, axis=1)], axis=1)
+    return np.stack([moving_average(pad[..., c], n) for c in range(x.shape[-1])], axis=-1)
+
+
+def signed(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+def chord(a, b):
+    """Direction (rad) and length of the chord from points a to b (..., 2)."""
+    d = b - a
+    return np.arctan2(d[..., 1], d[..., 0]), np.linalg.norm(d, axis=-1)
+
+
 def saturation(raw, prob, dev):
     raw = raw.unflatten(-1, (FUTURE, 2)).numpy()  # (N, K, 60, 2)
     near = np.abs(np.tanh(raw)) > 0.95
@@ -111,6 +137,94 @@ def conditioning(model, store, dev, device, batches, batch_size):
     return (total / batches).numpy()
 
 
+def off_road_causes(results, raw, road, dev, rows):
+    """Where the most probable vehicle-like mode leaves the drivable area, and what changes it."""
+    veh = dev["vehicle_like"]
+    n = int(veh.sum())
+    start, gt = dev["history"][veh, -1, :2], dev["target"][veh, :, :2]
+    pred = {name: results[name][0][veh] for name in ("coordinate", "physics")}
+    k_top = {name: np.argmax(results[name][1][veh], axis=1) for name in pred}
+    top = {name: pred[name][np.arange(n), k_top[name]] for name in pred}
+    best = {name: pred[name][np.arange(n), np.argmin(np.linalg.norm(pred[name][:, :, -1] - gt[:, None, -1], axis=-1), axis=1)]
+            for name in pred}
+    off = {name: road[name][veh].astype(bool) for name in road}
+
+    # The physics head's top-mode controls, re-rolled as predicted and edited.
+    controls = physics.bound(torch.from_numpy(raw[veh][np.arange(n), k_top["physics"]]).unflatten(-1, (FUTURE, 2))).double().numpy()
+    late = controls.copy()
+    late[:, 50:, 1] = 0.0
+    state = physics.initial_state(torch.from_numpy(dev["history"][veh]).double())  # position, heading, speed
+    variants = {"as predicted": controls, "1 s moving average": smooth(controls), "no steering in the last 1 s": late}
+    trajs = {name: physics.rollout(*state, torch.from_numpy(c)).numpy() for name, c in variants.items()}
+    print(f"\noff-road @1, vehicle-like ({n:,} dev scenes): coordinate {off['coordinate'].mean():.1%}, "
+          f"physics {off['physics'].mean():.1%}, ground truth {off['ground truth'].mean():.1%}")
+    print(f"physics top mode re-rolled from its controls (max deviation from the prediction "
+          f"{np.abs(trajs['as predicted'] - top['physics']).max():.1e} m):")
+    flags = off_road("train", rows[veh], np.stack(list(trajs.values()), axis=1))
+    for name, f in zip(trajs, flags.T):
+        print(f"  {name:28s} off-road {f.mean():.1%}")
+
+    def turn(traj):
+        """Heading change from the first to the last 1 s chord of (n, 60, 2); NaN if either is short."""
+        a, la = chord(start, traj[:, 9])
+        b, lb = chord(traj[:, 49], traj[:, 59])
+        return np.where((la >= CHORD_M) & (lb >= CHORD_M), signed(b - a), np.nan)
+
+    d_gt = turn(gt)
+    deg = np.degrees(np.abs(d_gt))
+    classes = {"slow": np.isnan(d_gt), f"straight <{STRAIGHT_DEG:g}": deg < STRAIGHT_DEG,
+               f"bend {STRAIGHT_DEG:g}-{TURN_DEG:g}": (deg >= STRAIGHT_DEG) & (deg < TURN_DEG),
+               f"turn >={TURN_DEG:g}": deg >= TURN_DEG}
+    print(f"\noff-road @1 by the ground truth's heading change, degrees (slow: a 1 s chord under {CHORD_M:g} m)")
+    print(f"{'':14s} {'n':>5}  {'coord':>6} {'phys':>6} {'gt':>6}  {'share of the physics off-road modes':>35}")
+    for name, m in classes.items():
+        print(f"{name:14s} {m.sum():5d}  {off['coordinate'][m].mean():6.1%} {off['physics'][m].mean():6.1%} "
+              f"{off['ground truth'][m].mean():6.1%}  {(off['physics'] & m).sum() / off['physics'].sum():35.1%}")
+
+    # Turns: how far each head turns, and on which side of the ground truth's end it stops.
+    t = classes[f"turn >={TURN_DEG:g}"]
+    end_dir, _ = chord(gt[:, 49], gt[:, 59])
+    normal = np.stack([-np.sin(end_dir), np.cos(end_dir)], axis=-1)  # left of the ground truth's last chord
+    lateral = {name: ((top[name][:, -1] - gt[:, -1]) * normal).sum(axis=-1) for name in pred}
+    print(f"\nturns ({t.sum()} scenes): median own turn / ground-truth turn, and endpoint outside the turn")
+    for name in pred:
+        outside = np.sign(d_gt) * lateral[name] < 0
+        o = t & off[name]
+        print(f"  {name:10s} best mode {np.nanmedian(turn(best[name])[t] / d_gt[t]):.2f}  top mode "
+              f"{np.nanmedian(turn(top[name])[t] / d_gt[t]):.2f}  outside: all top modes {outside[t].mean():.1%}, "
+              f"off-road ones {outside[o].mean():.1%} ({o.sum()})")
+    sat = (np.abs(controls[..., 1]) > 0.95).mean(axis=1)
+    print(f"  physics top mode, steps with |steering| > 0.95: off-road {sat[t & off['physics']].mean():.1%}, "
+          f"on-road {sat[t & ~off['physics']].mean():.1%}")
+
+    # Straight roads: the initial-heading error each head keeps over the first second.
+    psi_gt, _ = chord(start, gt[:, 9])
+    e0 = signed(state[1].numpy() - psi_gt)
+    s = classes[f"straight <{STRAIGHT_DEG:g}"]
+    print(f"\nstraight ({s.sum()} scenes): initial-heading error e0 (the physics head's start against the "
+          f"ground truth's first 1 s chord)")
+    for name in pred:
+        psi, length = chord(start, top[name][:, 9])
+        m = s & (length >= CHORD_M)
+        e = signed(psi - psi_gt)
+        print(f"  {name:10s} share of e0 kept in the top mode's first 1 s chord: "
+              f"{(e0[m] * e[m]).sum() / (e0[m] ** 2).sum():.2f} ({m.sum()} scenes)")
+    print(f"  {'|e0| deg':>10} {'n':>5}  {'coord':>6} {'phys':>6}")
+    for lo, hi in zip(HEADING_BINS[:-1], HEADING_BINS[1:]):
+        m = s & (np.degrees(np.abs(e0)) >= lo) & (np.degrees(np.abs(e0)) < hi)
+        print(f"  {f'{lo:g}-{hi:g}':>10} {m.sum():5d}  {off['coordinate'][m].mean():6.1%} {off['physics'][m].mean():6.1%}")
+
+    print("\noff-road @1 at matched lateral endpoint error (top mode against the ground truth's last chord, "
+          "moving futures)")
+    print(f"  {'|lateral| m':>11} {'n coord':>8} {'coord':>6} {'n phys':>7} {'phys':>6}")
+    for lo, hi in zip(LATERAL_BINS[:-1], LATERAL_BINS[1:]):
+        cells = []
+        for name in pred:
+            m = ~classes["slow"] & (np.abs(lateral[name]) >= lo) & (np.abs(lateral[name]) < hi)
+            cells.append(f"{m.sum():{8 if name == 'coordinate' else 7}d} {off[name][m].mean():6.1%}")
+        print(f"  {f'{lo:g}-{hi:g}':>11} {' '.join(cells)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--physics", required=True)
@@ -136,7 +250,8 @@ def main():
         pred, prob = predict(model, dev, device)
         results[name] = (pred, prob, forecast_metrics(pred, prob, gt, 6))
         if name == "physics":
-            saturation(torch.cat(store["outputs"]), prob, dev)
+            raw = torch.cat(store["outputs"])
+            saturation(raw, prob, dev)
         grads[name] = conditioning(model, store, dev, device, args.batches, args.batch_size)
 
     header = "  ".join(f"{a / 10:.0f}-{b / 10:.0f} s".rjust(7) for a, b in BANDS)
@@ -195,6 +310,8 @@ def main():
     for k in ARTIFACT_STEPS:
         accel = f"  accel from positions {a_pos[veh, k - 1].mean():6.2f} m/s^2 (|a| p95 {np.percentile(np.abs(a_pos[veh, k - 1]), 95):.2f})" if k else ""
         print(f"  step {k:2d}: speed from positions {v_pos[veh, k].mean():5.2f}  recorded {v_rec[veh, k].mean():5.2f} m/s{accel}")
+
+    off_road_causes(results, raw.numpy(), road, dev, rows)
 
 
 if __name__ == "__main__":
