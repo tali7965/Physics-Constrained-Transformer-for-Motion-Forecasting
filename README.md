@@ -10,6 +10,9 @@ trajectory is kinematically drivable by construction.
 The central experiment compares this physics-constrained decoder against an unconstrained coordinate
 decoder on accuracy, trajectory feasibility, and data efficiency.
 
+**Report:** [report/report.pdf](report/report.pdf) is a 5-page write-up of the method, results and
+diagnosis.
+
 ## Status
 
 Phase 1 (Setup & Data) — complete: all three splits are preprocessed and visually checked.
@@ -21,6 +24,7 @@ feasible, at a cost in accuracy that Phase 5 has to explain (see Results).
 Phase 5 (experiments) — complete: seeds, data efficiency, map and K ablations, and a diagnosis of
 the off-road excess. The physics head stays behind by 0.4–0.7 m brier-minFDE in every setting. The
 leaderboard entry was dropped because the challenge had closed, so results are on val (see Results).
+Phase 6 (analysis and write-up) — in progress: the technical report is in `report/`.
 
 ## Setup
 
@@ -55,6 +59,8 @@ src/train.py              training loop (ADE or winner-takes-all loss), dev-set 
 src/evaluate.py           score a model on val (or dev), incl. off-road, and write outputs/results/
 src/diagnose.py           compare the physics and coordinate heads on dev: accuracy gap and off-road causes
 src/submit.py             leaderboard submission file for the focal agent, with an end-to-end check on val
+src/figures.py            the report's figures, from the results and checkpoints
+report/                   technical report: LaTeX source, figures and the built PDF
 data/                     raw and preprocessed data (gitignored)
 outputs/                  figures and results (gitignored)
 ```
@@ -539,4 +545,15 @@ python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outpu
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics-k1/best.pt
 python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split val --limit 2000   # pipeline check
 python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split test
+```
+
+## Report
+
+The report in `report/` uses the IEEE conference template. Its numbers come from the val results and
+the dev diagnosis above, and `src/figures.py` regenerates every figure. It needs the best checkpoints
+of the `transformer` and `physics` runs, their val results, and the SSD for the dev scenes and maps.
+
+```bash
+python src/figures.py                                    # report/figures/*.pdf
+cd report && latexmk -pdf report.tex                     # report/report.pdf (TeX Live)
 ```

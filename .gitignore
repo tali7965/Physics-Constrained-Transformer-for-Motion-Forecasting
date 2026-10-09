@@ -16,3 +16,12 @@ outputs/
 
 # Private planning notes
 VISION_PROJECT_SCOPE.md
+
+# LaTeX build files (report/report.pdf is tracked)
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.out
