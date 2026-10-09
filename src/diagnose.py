@@ -103,6 +103,14 @@ def chord(a, b):
     return np.arctan2(d[..., 1], d[..., 0]), np.linalg.norm(d, axis=-1)
 
 
+def turn_angle(start, traj):
+    """Heading change from the first to the last 1 s chord of (n, 60, 2) trajectories starting at
+    start (n, 2); NaN if either chord is shorter than CHORD_M."""
+    a, la = chord(start, traj[:, 9])
+    b, lb = chord(traj[:, 49], traj[:, 59])
+    return np.where((la >= CHORD_M) & (lb >= CHORD_M), signed(b - a), np.nan)
+
+
 def saturation(raw, prob, dev):
     raw = raw.unflatten(-1, (FUTURE, 2)).numpy()  # (N, K, 60, 2)
     near = np.abs(np.tanh(raw)) > 0.95
@@ -164,12 +172,7 @@ def off_road_causes(results, raw, road, dev, rows):
     for name, f in zip(trajs, flags.T):
         print(f"  {name:28s} off-road {f.mean():.1%}")
 
-    def turn(traj):
-        """Heading change from the first to the last 1 s chord of (n, 60, 2); NaN if either is short."""
-        a, la = chord(start, traj[:, 9])
-        b, lb = chord(traj[:, 49], traj[:, 59])
-        return np.where((la >= CHORD_M) & (lb >= CHORD_M), signed(b - a), np.nan)
-
+    turn = lambda traj: turn_angle(start, traj)
     d_gt = turn(gt)
     deg = np.degrees(np.abs(d_gt))
     classes = {"slow": np.isnan(d_gt), f"straight <{STRAIGHT_DEG:g}": deg < STRAIGHT_DEG,
