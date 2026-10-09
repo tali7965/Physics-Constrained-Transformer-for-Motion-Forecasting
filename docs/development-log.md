@@ -453,6 +453,17 @@ coordinate head and 0.2% for the ground truth.
   the outside of the turn (coordinate head 55%). The bounds allow the turn, though: its best mode
   turns as far as the coordinate head's (0.92 against 0.94). In the turns where it leaves the road,
   its steering is at the bound in 18% of steps, against 15% in turns where it stays on.
+- *The accuracy gap follows the same pattern.* By the same heading-change classes (dev, vehicle-like),
+  coordinate / physics:
+
+  | Class | Scenes | Off-road @1 | brier-minFDE@6 | minFDE@6 | minFDE@1 |
+  | --- | --- | --- | --- | --- | --- |
+  | Slow (1 s chord < 1 m) | 1,015 | 0.8% / 2.6% | 2.08 / 2.36 | 1.53 / 1.75 | 5.61 / 6.59 |
+  | Straight (< 10°) | 2,732 | 0.5% / 2.4% | 2.31 / 2.99 | 1.67 / 2.40 | 5.93 / 6.53 |
+  | Bend (10–30°) | 305 | 4.6% / 14.8% | 3.45 / 4.55 | 2.76 / 3.90 | 7.96 / 8.95 |
+  | Turn (≥ 30°) | 584 | 6.8% / 18.2% | 4.80 / 5.95 | 4.15 / 5.28 | 10.27 / 11.70 |
+
+  The brier-minFDE gap is 0.68 m on straight roads and 1.1 m in bends and turns.
 - *On straight roads, it keeps its starting heading.* Step 0 showed that the last-step direction is
   the better of the two starting headings. But over the first second, the physics head's most
   probable mode keeps 94% of that direction's error against the ground truth's first-second

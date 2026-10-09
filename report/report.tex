@@ -49,7 +49,9 @@ and regress future positions directly. Nothing in such a decoder ties consecutiv
 vehicle motion, so it can predict sideways slides, turns too sharp for the vehicle's speed, or
 jitter between steps. A long-standing remedy is to predict control inputs instead and integrate
 them through a vehicle model~\cite{cui2020dkm,salzmann2020trajectronpp}, so that every output is
-kinematically feasible by construction.
+kinematically feasible by construction. Bounded controls also matter for ride quality: a comfortable
+ride avoids heavy steering and harsh acceleration, so it is useful to see how a model limited to
+such controls performs.
 
 The goal of this project is not to build the most accurate forecaster, nor to show that a kinematic
 decoder is the best approach. It is to build a physically accurate model and measure, in a
@@ -350,7 +352,7 @@ Lateral miss $\ge 4$\,m & 295 / 516 & 9.2\% & 28.3\% \\
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.94\textwidth]{figures/examples.pdf}
+\includegraphics[width=\textwidth]{figures/examples.pdf}
 \caption{Dev scenes, each drawn at random from the scenes that meet its condition. Thick lines are
 the most probable modes. (a)~A turn in which both heads' most probable modes end within 2\,m (one of
 3). (b)~A turn in which the kinematic head's most probable mode turns the right way but only
@@ -379,13 +381,15 @@ gives 5.0\% off-road instead of 5.2\%. Removing its steering in the last second 
 truth (median 0.85 of the heading change, against 0.92 for the coordinate head), and 61\% of its
 off-road modes in turns end on the outside of the turn (coordinate head 55\%). The bounds are not
 what stops it: its best mode turns as far as the coordinate head's (0.92 against 0.94), and in the
-turns where it leaves the road its steering is at the bound in only 18\% of steps.
+turns where it leaves the road its steering is at the bound in only 18\% of steps. The accuracy gap
+has the same shape: on dev, brier-minFDE trails by 0.68\,m on straight roads and by 1.1\,m in bends
+and turns.
 
 \textbf{Uncorrected initial heading.} On straight roads, over its first second, the kinematic head's
 most probable mode keeps 94\% of the error $e_0$ in its initial heading, where the coordinate head
-keeps 3\%. The last-step displacement is the better of the two available starting headings: at
-every moving speed it is closer to the first ground-truth step than the recorded heading is.
-Still, the head does not correct what error remains. Its off-road share on straight roads rises
+keeps 3\%. Its starting heading, the last-step displacement, is the better of the two available
+(closer to the first ground-truth step than the recorded heading), but the head does not correct
+what error remains. Its off-road share on straight roads rises
 from 1.2\% for $|e_0| < 1^\circ$ to 18.4\% for $|e_0| \ge 4^\circ$ (coordinate head: 0.2\% to 2.4\%).
 
 \textbf{Errors across the lane.} When the most probable mode misses the ground truth's endpoint by
@@ -402,7 +406,18 @@ training scenes as well as the coordinate head. Its problems are therefore optim
 state, not capacity. These point to remedies we have not tested: rescaling the gradient per step,
 predicting controls as residuals around a lane-following reference, estimating the initial state
 from more of the history, or projecting a coordinate decoder's output onto feasible trajectories
-instead of decoding controls directly.
+instead of decoding controls directly. The bounds here reach nearly every real future, so they rule
+out extreme manoeuvres rather than enforce comfort; a comfort-oriented model would tighten them and
+limit how fast steering may change.
+
+\textbf{A hybrid decoder.} The kinematic head's failures concentrate in sharp turns: it leaves the
+road in 2.4\% of straight-road scenes (coordinate head 0.5\%) but in 18.2\% of turns of $30^\circ$ or
+more (6.8\%). This suggests a hybrid that decodes kinematically on straight roads and gentle
+curves, where smooth, drivable output is cheap, and with coordinates in sharp turns. Two
+conditions would decide whether it pays off. The switch must use information available at
+prediction time, such as the lane geometry ahead, rather than the ground-truth turn used here.
+And the kinematic head's 0.68\,m gap on straight roads, mostly its uncorrected initial heading,
+would need closing too. We leave this open for future work.
 
 The study has clear limits. It uses one small model (1.43M parameters), a 50k-scene training
 subset, one benchmark and two seeds for the main comparison. Results are on validation only, because

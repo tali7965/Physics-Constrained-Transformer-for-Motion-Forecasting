@@ -6,7 +6,10 @@ head** predicts acceleration and steering and integrates them through a differen
 bicycle model, so every trajectory is drivable by construction.
 
 The goal is not the most accurate forecaster. It is to build a physically accurate model and measure
-how it performs against an otherwise identical unconstrained one.
+how it performs against an otherwise identical unconstrained one. Bounded controls also matter for
+ride comfort: a smooth ride avoids heavy steering and harsh acceleration, so it is useful to see how a
+model limited to such controls performs. The bounds used here rule out extreme manoeuvres; a
+comfort-tuned model would set them tighter.
 
 [Technical report (PDF)](report/report.pdf) ·
 [Pretrained weights](https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/tag/v1.0) ·
@@ -117,6 +120,21 @@ src/
 report/             technical report (LaTeX source and PDF)
 docs/               development log
 ```
+
+## Future work
+
+The physics head's failures concentrate in sharp turns. On the dev set it leaves the road in 2.4% of
+straight-road scenes (coordinate head 0.5%) but in 18.2% of turns of 30° or more (6.8%). A **hybrid
+decoder** could keep drivable output where it is cheap and avoid the worst failures: physics-constrained
+on straight roads and gentle curves, coordinate-based in sharp turns. Two things would decide whether it
+pays off:
+
+- The switch has to be predicted at run time, for example from the lane geometry ahead, since the
+  true turn is unknown.
+- The physics head's 0.68 m gap on straight roads, mostly its uncorrected initial heading, has to
+  close too.
+
+This is open for anyone to pick up.
 
 ## Citation
 
