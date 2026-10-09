@@ -106,7 +106,10 @@ def gradient(models, dev, device):
     save(fig, "gradient.pdf")
 
 
-def examples(models, dev, rows, device):
+def example_scenes(models, dev, rows, device):
+    """The three example scenes, each a dict: title; focal history (the last 3 s), ground truth, and
+    per head its modes, most probable mode and that mode's first off-road step (None if it stays on
+    the road); drivable areas and lanes in the focal frame; and the plot window (mid, half)."""
     veh = np.flatnonzero(dev["vehicle_like"])
     n = len(veh)
     start, gt = dev["history"][veh, -1, :2], dev["target"][veh, :, :2]
@@ -138,61 +141,90 @@ def examples(models, dev, rows, device):
     pdir, rdir = cfg["processed_dir"] / "train", cfg["raw_dir"] / "train"
     sid = np.load(pdir / "scenario_id.npy", mmap_mode="r")
     origin, theta = np.load(pdir / "origin.npy", mmap_mode="r"), np.load(pdir / "theta.npy", mmap_mode="r")
-    fig, axes = plt.subplots(2, 3, figsize=(PAGE, 3.9))
+    scenes = []
     for j, (title, i, count) in enumerate(picks):
         d, r = veh[i], rows[veh[i]]
         avm = ArgoverseStaticMap.from_json(rdir / sid[r] / f"log_map_archive_{sid[r]}.json")
         areas = [to_agent_frame(a.xyz[:, :2], origin[r], float(theta[r])) for a in avm.get_scenario_vector_drivable_areas()]
         history = dev["history"][d, -30:, :2]  # the last 3 s
         pts = np.vstack([history, gt[i], pred["coordinate"][i].reshape(-1, 2), pred["physics"][i].reshape(-1, 2)])
-        mid, half = (pts.min(0) + pts.max(0)) / 2, max(15.0, (pts.max(0) - pts.min(0)).max() / 2 + 4.0)
+        first_off = {}
+        for name in pred:
+            outside = ~np.any([PolygonPath(poly).contains_points(top[name][i]) for poly in areas], axis=0)
+            first_off[name] = int(np.argmax(outside)) if outside.any() else None
         extra = f" ({e0[i]:.1f}°)" if "straight" in title else ""
         print(f"({'abc'[j]}) {title}: dev row {r}, scenario {sid[r]}, one of {count}{extra}")
+        scenes.append({
+            "title": f"({'abc'[j]}) {title}{extra}", "history": history, "gt": gt[i],
+            "pred": {name: pred[name][i] for name in pred}, "top": {name: int(k_top[name][i]) for name in pred},
+            "first_off": first_off, "areas": areas, "lanes": dev["lanes"][d][dev["lane_type"][d] >= 0],
+            "mid": (pts.min(0) + pts.max(0)) / 2, "half": max(15.0, (pts.max(0) - pts.min(0)).max() / 2 + 4.0),
+        })
+    return scenes
+
+
+def draw_map(ax, scene):
+    """A scene's drivable area, lanes and focal history, its plot window and a 10 m scale bar."""
+    mid, half = scene["mid"], scene["half"]
+    for poly in scene["areas"]:
+        ax.add_patch(Polygon(poly, closed=True, facecolor=DRIVABLE, edgecolor=LANE, lw=0.4, zorder=0))
+    for lane in scene["lanes"]:
+        ax.plot(*lane.T, color=LANE, lw=0.5, zorder=1)
+    ax.plot(*scene["history"].T, color=MUTED, lw=1.6, zorder=2)
+    ax.set_xlim(mid[0] - 1.2 * half, mid[0] + 1.2 * half)
+    ax.set_ylim(mid[1] - half, mid[1] + half)
+    ax.set_aspect("equal")
+    ax.grid(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    x0, y0 = mid[0] - 1.2 * half + 0.06 * half, mid[1] - half + 0.08 * half
+    ax.plot([x0, x0 + 10], [y0, y0], color=INK, lw=1.2, zorder=5)
+    ax.text(x0 + 5, y0 + 0.05 * half, "10 m", ha="center", va="bottom", fontsize=6.5, zorder=5)
+
+
+def legend_handles():
+    return [Line2D([], [], color=MUTED, lw=1.6, label="history (3 s)"),
+            Line2D([], [], color=INK, lw=1.6, label="ground truth"),
+            Line2D([], [], color=COLOR["coordinate"], lw=1.6, label=LABEL["coordinate"]),
+            Line2D([], [], color=COLOR["physics"], lw=1.6, label=LABEL["physics"]),
+            Line2D([], [], color=INK, lw=0, marker="x", ms=6, mew=1.6, label="first off-road point"),
+            Patch(facecolor=DRIVABLE, edgecolor=LANE, lw=0.4, label="drivable area")]
+
+
+def examples(scenes):
+    fig, axes = plt.subplots(2, 3, figsize=(PAGE, 3.9))
+    for j, scene in enumerate(scenes):
         for k, name in enumerate(("coordinate", "physics")):
             ax = axes[k, j]
-            for poly in areas:
-                ax.add_patch(Polygon(poly, closed=True, facecolor=DRIVABLE, edgecolor=LANE, lw=0.4, zorder=0))
-            for lane in dev["lanes"][d][dev["lane_type"][d] >= 0]:
-                ax.plot(*lane.T, color=LANE, lw=0.5, zorder=1)
-            ax.plot(*history.T, color=MUTED, lw=1.6, zorder=2)
-            ax.plot(*gt[i].T, color=INK, lw=1.6, zorder=3)
-            for m, traj in enumerate(pred[name][i]):
-                is_top = m == k_top[name][i]
+            draw_map(ax, scene)
+            ax.plot(*scene["gt"].T, color=INK, lw=1.6, zorder=3)
+            for m, traj in enumerate(scene["pred"][name]):
+                is_top = m == scene["top"][name]
                 ax.plot(*traj.T, color=COLOR[name], lw=1.6 if is_top else 0.7, alpha=1.0 if is_top else 0.6, zorder=4)
-            outside = ~np.any([PolygonPath(poly).contains_points(top[name][i]) for poly in areas], axis=0)
-            if outside.any():
-                ax.plot(*top[name][i][np.argmax(outside)], marker="x", ms=6, mew=1.6, color=INK, zorder=6)
-            ax.set_xlim(mid[0] - 1.2 * half, mid[0] + 1.2 * half)
-            ax.set_ylim(mid[1] - half, mid[1] + half)
-            ax.set_aspect("equal")
-            ax.grid(False)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            x0, y0 = mid[0] - 1.2 * half + 0.06 * half, mid[1] - half + 0.08 * half
-            ax.plot([x0, x0 + 10], [y0, y0], color=INK, lw=1.2, zorder=5)
-            ax.text(x0 + 5, y0 + 0.05 * half, "10 m", ha="center", va="bottom", fontsize=6.5, zorder=5)
+            if scene["first_off"][name] is not None:
+                ax.plot(*scene["pred"][name][scene["top"][name], scene["first_off"][name]], marker="x", ms=6, mew=1.6,
+                        color=INK, zorder=6)
             if j == 0:
                 ax.set_ylabel(LABEL[name])
-        axes[0, j].set_title(f"({'abc'[j]}) {title}{extra}", loc="left")
-    handles = [Line2D([], [], color=MUTED, lw=1.6, label="history (3 s)"),
-               Line2D([], [], color=INK, lw=1.6, label="ground truth"),
-               Line2D([], [], color=COLOR["coordinate"], lw=1.6, label=LABEL["coordinate"]),
-               Line2D([], [], color=COLOR["physics"], lw=1.6, label=LABEL["physics"]),
-               Line2D([], [], color=INK, lw=0, marker="x", ms=6, mew=1.6, label="first off-road point"),
-               Patch(facecolor=DRIVABLE, edgecolor=LANE, lw=0.4, label="drivable area")]
-    fig.legend(handles=handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(0.5, -0.02))
+        axes[0, j].set_title(scene["title"], loc="left")
+    fig.legend(handles=legend_handles(), loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(0.5, -0.02))
     fig.tight_layout(rect=(0, 0.04, 1, 1), h_pad=0.4, w_pad=0.4)
     save(fig, "examples.pdf")
+
+
+def load(device):
+    """Both heads' best checkpoints, the dev rows and their scenes in RAM."""
+    models = {name: load_checkpoint(PROJECT_ROOT / "outputs" / "runs" / run / "best.pt", device) for name, run in RUNS.items()}
+    _, rows = split_rows(models["physics"][1]["config"]["protocol"], split_meta("train")["n_scenarios"])
+    return models, load_focal("train", rows, scene=True), rows
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     data_efficiency()
     device = pick_device()
-    models = {name: load_checkpoint(PROJECT_ROOT / "outputs" / "runs" / run / "best.pt", device) for name, run in RUNS.items()}
-    _, rows = split_rows(models["physics"][1]["config"]["protocol"], split_meta("train")["n_scenarios"])
-    dev = load_focal("train", rows, scene=True)
-    examples(models, dev, rows, device)
+    models, dev, rows = load(device)
+    examples(example_scenes(models, dev, rows, device))
     gradient(models, dev, device)
 
 
