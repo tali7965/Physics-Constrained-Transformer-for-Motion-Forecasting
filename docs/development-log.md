@@ -41,6 +41,8 @@ the off-road excess. The physics head stays behind by 0.4–0.7 m brier-minFDE i
 leaderboard entry was dropped because the challenge had closed, so results are on val (see Results).
 Phase 6 (analysis and write-up) — complete: the technical report, its figures, the README animation
 and front page, and the pretrained weights (v1.0 release).
+Phase 7 (smooth and accurate) — complete: a 0.9 s Savitzky–Golay filter on the coordinate head
+removes its jitter with no accuracy cost; fitting the bicycle model costs accuracy (see Results).
 
 ## Data
 
@@ -501,6 +503,70 @@ python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outpu
 python src/visualize.py --split train --random 6 --seed 0 --checkpoint outputs/runs/physics-k1/best.pt
 python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split val --limit 2000   # pipeline check
 python src/submit.py --checkpoint outputs/runs/transformer/best.pt --split test
+```
+
+### Phase 7: a smooth and accurate coordinate model
+
+The aim was to keep the coordinate head's accuracy but limit acceleration and steering to a
+comfortable range outside sharp turns. Route A, tested first, smooths the trained head's predictions
+after the fact. Route B, training with a comfort penalty, was to follow only if A cost too much.
+
+**Comfort limits from the data.** On the gentle vehicle-like futures of the training subset (heading
+change under 30°), the 95th percentiles at 2 Hz over the first 5 s are 2.84 m/s² for
+|longitudinal acceleration| and 0.87 m/s² for |lateral acceleration|. The last 0.7 s is left out
+because of the end-of-future artifact, and 10 Hz differences are avoided because they amplify
+tracking noise.
+
+**Two ways to smooth.** *Fitting* runs `physics.fit_controls` on each predicted mode within those
+limits, either on every mode or only where the predicted turn is under 30°. The switch uses the
+prediction, so it is available at run time. *Filtering* applies a quadratic Savitzky–Golay filter
+over 0.9 s (9 steps), with the current position as the first sample, to every mode. The window was
+chosen on dev: 5 steps leave 15% of top modes infeasible at 10 Hz, 9 steps leave 1%, and 15 steps
+add 4 cm of FDE.
+
+**Results on val** (`outputs/results/transformer-smooth_val.json`), coordinate head. Infeasible and
+off-road are for the most probable vehicle-like mode, and comfort is the 95th percentile of its 2 Hz
+accelerations:
+
+| Version | brier-minFDE | minFDE, K=6 | minFDE, K=1 | Off-road @1 | Infeasible 10 Hz @1 | p95 \|a\| / \|a_lat\| |
+| --- | --- | --- | --- | --- | --- | --- |
+| Raw | 2.572 | 1.943 | 6.092 | 1.52% | 57.8% | 1.70 / 1.49 |
+| Filtered | **2.572** | **1.943** | 6.095 | **1.50%** | 0.86% | 1.65 / 1.47 |
+| Fitted where gentle | 2.625 | 1.995 | 6.172 | 1.76% | 11.3% | 1.88 / 1.38 |
+| Fitted everywhere | 2.773 | 2.143 | 6.256 | 3.45% | **0.00%** | 2.65 / 0.87 |
+| Ground truth | | | | 0.19% | 2.93% | 2.81 / 1.69 |
+
+- *Filtering is free.* It removes the 10 Hz jitter (infeasible 57.8% → 0.86%, below the tracked
+  ground truth's 2.93%). brier-minFDE and minFDE@6 are unchanged to the third decimal, and K=1
+  minFDE moves by 0.003 m. Its
+  accelerations stay gentler than real drivers'. Unlike fitting, it gives no per-trajectory
+  guarantee.
+- *Fitting costs accuracy and adds lateral acceleration early on.* On gentle paths, the raw
+  coordinate head is already smoother than the fit at 2 Hz (dev p95 |a_lat| 0.48 against 0.83). The
+  fit has to start from the noisy last-step heading and steer back to the prediction, which
+  concentrates its lateral acceleration in the first 2–3 s: the physics head's initial-heading
+  problem again. Penalising acceleration in the fit barely changes this (p95 |a| 1.88 → 1.76 at
+  weight 0.1).
+- *Sharp turns must stay free.* Fitting every mode limits lateral acceleration in sharp turns too,
+  which more than doubles off-road (3.45%).
+- *Not the end artifact.* Most of the fitted versions' accuracy cost is already there within 5 s
+  (minFDE@6 over 5 s: 1.531 against 1.487 for the gentle-only fit).
+
+Route B was dropped: training cannot do much better than a filter that already costs nothing. For a
+smooth and accurate forecaster here, the coordinate head plus a light filter beats decoding through
+a vehicle model. The hybrid of the report's future work only pays where a hard per-trajectory
+guarantee is required.
+
+**A GPU pitfall found on the way.** On MPS, `physics.fit_controls` returns wrong fits for batches
+above ~2,000 trajectories: at 2,500 they are more than 100 m off the CPU fit, while at 2,000 they
+agree within 4 cm. Rollout, its gradient, Adam, the clamp and `initial_state` each match the CPU
+alone, so the root cause is still unknown. `physics.MAX_FIT_BATCH = 2000` now makes fit_controls
+fit larger batches in chunks. Model training and evaluation run 384 and 1,536 trajectories per
+batch, and the rollout matches the CPU at 10,000.
+
+```bash
+python src/smooth.py --limits
+python src/smooth.py --checkpoint outputs/runs/transformer/best.pt --split val   # ~1 h on the M4
 ```
 
 ## Report

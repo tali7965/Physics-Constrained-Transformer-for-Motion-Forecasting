@@ -37,7 +37,8 @@ acceleration at 10\,Hz, and none do at 2\,Hz. The kinematic decoder also leaves 
 more often (5.2\% against 1.5\%). We trace the accuracy gap to the integration, which gives the
 first second's controls about 60 times the gradient of the last second's. The off-road excess comes
 from errors across the lane: an initial heading the model does not correct, and turns it does not
-complete.
+complete. A 0.9\,s smoothing filter, by contrast, removes the coordinate decoder's jitter at no
+accuracy cost.
 \end{abstract}
 
 \section{Introduction}
@@ -410,6 +411,36 @@ instead of decoding controls directly. The bounds here reach nearly every real f
 out extreme manoeuvres rather than enforce comfort; a comfort-oriented model would tighten them and
 limit how fast steering may change.
 
+\begin{table}[t]
+\centering
+\caption{Smoothing the coordinate head's predictions after the fact, validation. ``brier'' is
+brier-minFDE ($K{=}6$); off-road and infeasibility are for the most probable vehicle-like mode.}
+\label{tab:smooth}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccc}
+\toprule
+Version & brier & minFDE, $K{=}1$ & Off-road & Infeasible, 10\,Hz \\
+\midrule
+Raw & 2.57 & 6.09 & 1.5\% & 57.8\% \\
+Filtered (0.9\,s) & 2.57 & 6.10 & 1.5\% & 0.9\% \\
+Fitted, gentle turns & 2.63 & 6.17 & 1.8\% & 11.3\% \\
+Fitted, everywhere & 2.77 & 6.26 & 3.4\% & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Smoothing instead of constraining.} A comfortable ride needs limited acceleration and
+steering, but the constraint does not have to sit in the decoder. Table~\ref{tab:smooth} smooths
+the trained coordinate head's predictions in two ways. \emph{Fitting} finds the bicycle-model
+trajectory closest to each predicted mode within comfort limits taken from the data: the 95th
+percentiles of gentle training futures, 2.84\,m/s$^2$ and 0.87\,m/s$^2$ lateral. \emph{Filtering}
+applies a quadratic Savitzky--Golay filter over 0.9\,s. Filtering removes the jitter (0.9\% infeasible
+at 10\,Hz, below the ground truth's 2.9\%) with brier-minFDE unchanged. Fitting costs 0.05\,m even
+when sharp turns are left alone, because the fit must start from the noisy initial heading. This
+adds lateral acceleration in the first seconds, so on gentle paths the raw prediction is already
+smoother than its fit.
+
 \textbf{A hybrid decoder.} The kinematic head's failures concentrate in sharp turns: it leaves the
 road in 2.4\% of straight-road scenes (coordinate head 0.5\%) but in 18.2\% of turns of $30^\circ$ or
 more (6.8\%). This suggests a hybrid that decodes kinematically on straight roads and gentle
@@ -417,7 +448,8 @@ curves, where smooth, drivable output is cheap, and with coordinates in sharp tu
 conditions would decide whether it pays off. The switch must use information available at
 prediction time, such as the lane geometry ahead, rather than the ground-truth turn used here.
 And the kinematic head's 0.68\,m gap on straight roads, mostly its uncorrected initial heading,
-would need closing too. We leave this open for future work.
+would need closing too. Given the filter, such a hybrid matters only where every trajectory must be
+guaranteed to stay within limits. We leave this open for future work.
 
 The study has clear limits. It uses one small model (1.43M parameters), a 50k-scene training
 subset, one benchmark and two seeds for the main comparison. Results are on validation only, because
@@ -430,8 +462,9 @@ diagnoses use one checkpoint per head. Off-road depends on the map's drivable-ar
 This project set out to build a physically accurate forecaster and measure how it performs, not to
 find the best approach. Integrating bounded controls through a kinematic bicycle model makes every
 trajectory drivable, but on Argoverse~2 it costs 0.4--0.7\,m in every setting and does not improve
-data efficiency. Correcting the initial heading and the slow learning of late controls, rather than
-adding constraints, is the natural next step.
+data efficiency. A light filter on a coordinate decoder gives smooth trajectories without that cost.
+For decoders that must guarantee feasibility, correcting the initial heading and the slow learning of
+late controls, rather than adding constraints, is the natural next step.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}

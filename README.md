@@ -28,6 +28,7 @@ measured on the most probable trajectory of vehicle-like agents.
 | Decoder | brier-minFDE | minFDE | MR | minFDE (K=1) | Infeasible (10 Hz / 2 Hz) | Off-road |
 | --- | --- | --- | --- | --- | --- | --- |
 | Coordinate head | **2.57** | **1.94** | **0.303** | **6.09** | 57.8% / 0.0% | **1.5%** |
+| Coordinate head + 0.9 s filter | **2.57** | **1.94** | 0.304 | 6.10 | 0.9% / 0.0% | **1.5%** |
 | Physics head | 3.16 | 2.55 | 0.431 | 6.95 | **0.0% / 0.0%** | 5.2% |
 
 The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K = 1):
@@ -49,6 +50,10 @@ The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K
   physics head leaves the road more often.
 - Integration also gives early controls about 60× the gradient of late ones, so late steering
   learns slowly.
+- A light filter makes the coordinate head smooth for free. A 0.9 s Savitzky–Golay filter on its
+  output cuts 10 Hz infeasibility from 58% to 0.9% with no change in accuracy. Fitting the bicycle
+  model to its output instead costs accuracy, because the fit must start from the noisy current
+  heading.
 
 ## Installation
 
@@ -101,6 +106,7 @@ A full run takes about 3 h on an Apple M4. Ablation configs are in `configs/phas
 python src/evaluate.py --checkpoint outputs/runs/physics/best.pt        # validation metrics
 python src/visualize.py --split val --random 6 --checkpoint outputs/runs/physics/best.pt
 python src/diagnose.py --physics outputs/runs/physics/best.pt --coordinate outputs/runs/transformer/best.pt
+python src/smooth.py --checkpoint outputs/runs/transformer/best.pt --split val   # smoothing comparison
 python src/submit.py --checkpoint outputs/runs/physics/best.pt --split test   # submission file
 ```
 
@@ -116,12 +122,17 @@ src/
   train.py          winner-takes-all training with dev-set model selection
   evaluate.py       Argoverse 2 metrics, feasibility and off-road rates
   diagnose.py       physics-head diagnostics
+  smooth.py         post-hoc smoothing of the coordinate head
   figures.py        report figures
 report/             technical report (LaTeX source and PDF)
 docs/               development log
 ```
 
 ## Future work
+
+Smoothness alone no longer needs the physics head: the filtered coordinate head is already smooth and
+accurate. A physics-based decoder still matters where every trajectory must be guaranteed to stay within
+limits.
 
 The physics head's failures concentrate in sharp turns. On the dev set it leaves the road in 2.4% of
 straight-road scenes (coordinate head 0.5%) but in 18.2% of turns of 30° or more (6.8%). A **hybrid
