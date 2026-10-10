@@ -32,6 +32,8 @@ A_MAX = 8.0     # |acceleration|, m/s^2
 K_MAX = 0.2     # |curvature|, 1/m
 A_LAT = 6.0     # |lateral acceleration| v^2 kappa, m/s^2
 MIN_SPEED = 0.5  # m/s; below it the last-step direction is noise and the recorded heading is used
+MAX_FIT_BATCH = 2000  # fit_controls on MPS goes wrong above ~2,000 trajectories (2,500: >100 m off
+                      # the CPU fit; 2,000: within 4 cm), so larger batches are fitted in chunks
 
 
 def initial_state(history):
@@ -92,14 +94,19 @@ def rollout(pos, heading, speed, controls, a_lat=A_LAT, k_max=K_MAX):
     return torch.stack(out, dim=-2)
 
 
-def fit_controls(history, target, a_max=A_MAX, k_max=K_MAX, a_lat=A_LAT, steps=1500, control_step=1):
+def fit_controls(history, target, a_max=A_MAX, k_max=K_MAX, a_lat=A_LAT, steps=1500, control_step=1, accel_weight=0.0):
     """Per-scene controls within the bounds that best reproduce target (N, 60, 2) under the ADE loss.
 
     Projected Adam with step sizes of 0.1 m/s^2 and 0.005 1/m of curvature (at the low-speed limit),
     cosine-decayed, so the result does not depend on the tanh parameterization the model uses. 3000 steps instead of
     1500 lower the vehicle FDE floor by under 1 cm. control_step > 1 fits knots, as the head with
-    that control_step outputs them.
+    that control_step outputs them. accel_weight > 0 adds accel_weight * mean(a^2) (a in m/s^2) to each
+    scene's loss, so among controls that track the target about equally well the gentlest are chosen.
     """
+    if len(target) > MAX_FIT_BATCH:
+        return torch.cat([fit_controls(history[i : i + MAX_FIT_BATCH], target[i : i + MAX_FIT_BATCH], a_max, k_max,
+                                       a_lat, steps, control_step, accel_weight)
+                          for i in range(0, len(target), MAX_FIT_BATCH)])
     pos, heading, speed = initial_state(history)
     weights = interpolation(control_step) if control_step > 1 else None
     controls = (lambda c: interpolate(c, weights)) if weights is not None else (lambda c: c)
@@ -110,9 +117,12 @@ def fit_controls(history, target, a_max=A_MAX, k_max=K_MAX, a_lat=A_LAT, steps=1
     opt = torch.optim.Adam([u], lr=1.0)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     for _ in range(steps):
-        err = (rollout(pos, heading, speed, controls(u * unit), a_lat, k_max) - target).norm(dim=-1)
+        c = controls(u * unit)
+        loss = (rollout(pos, heading, speed, c, a_lat, k_max) - target).norm(dim=-1).mean(dim=-1)
+        if accel_weight:
+            loss = loss + accel_weight * (c[..., 0] ** 2).mean(dim=-1)
         opt.zero_grad()
-        err.mean(dim=-1).sum().backward()  # scenes are independent: sum keeps each one's step size
+        loss.sum().backward()  # scenes are independent: sum keeps each one's step size
         opt.step()
         sched.step()
         with torch.no_grad():
