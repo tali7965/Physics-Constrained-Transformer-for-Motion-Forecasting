@@ -30,8 +30,10 @@ measured on the most probable trajectory of vehicle-like agents.
 | Coordinate head | **2.57** | **1.94** | **0.303** | **6.09** | 57.8% / 0.0% | **1.5%** |
 | Coordinate head + 0.9 s filter | **2.57** | **1.94** | 0.304 | 6.10 | 0.9% / 0.0% | **1.5%** |
 | Physics head | 3.16 | 2.55 | 0.431 | 6.95 | **0.0% / 0.0%** | 5.2% |
-| Road-aware physics head (Phase 8) | 3.12 | 2.52 | 0.408 | 6.94 | **0.0% / 0.0%** | 3.7% |
-| Road-aware physics head + lane re-ranking | 3.12 | 2.52 | 0.408 | 6.86 | **0.0% / 0.0%** | **1.5%** |
+| Road-aware physics head (Phase 8) | 3.10 | 2.50 | 0.402 | 6.79 | **0.0% / 0.0%** | **1.5%** |
+| Road-aware physics head, no re-ranking | 3.10 | 2.50 | 0.402 | 6.86 | **0.0% / 0.0%** | 3.5% |
+
+The road-aware rows are means over training seeds 0, 1 and 2 (see Phase 8 in the development log).
 
 The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K = 1):
 
@@ -52,6 +54,8 @@ The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K
   physics head leaves the road more often.
 - Integration also gives early controls about 60× the gradient of late ones, so late steering
   learns slowly.
+- Both are fixable without giving up the constraint (Phase 8): a learned initial-state correction, a
+  heading loss and a lane loss bring the physics head's off-road share down to the coordinate head's.
 - A light filter makes the coordinate head smooth for free. A 0.9 s Savitzky–Golay filter on its
   output cuts 10 Hz infeasibility from 58% to 0.9% with no change in accuracy. Fitting the bicycle
   model to its output instead costs accuracy, because the fit must start from the noisy current
@@ -70,9 +74,17 @@ one and keeps every trajectory drivable:
 | The most probable mode may be the one that leaves the road | At run time, lower a mode's score per metre it strays beyond 1.5 m from every lane | `eval.lane_rerank` in the config, on by default; `--no-rerank` turns it off |
 
 The lane distance uses only the lane centerlines the model already receives, so it needs no raw map
-and no new preprocessing, and the re-ranking is a legitimate run-time step. Off-road for the most
-probable mode drops from 5.2% to 1.5% (the coordinate head's level), and over all six modes from 5.7%
-to 2.6%, while brier-minFDE improves from 3.16 to 3.12. Details and ablations are in the
+and no new preprocessing, and the re-ranking is a legitimate run-time step. Over three training seeds
+each (val, mean ± std):
+
+| | brier-minFDE | minFDE, K=6 | Off-road, most probable mode | Off-road, all 6 modes | Infeasible |
+| --- | --- | --- | --- | --- | --- |
+| Physics head | 3.149 ± 0.013 | 2.540 ± 0.010 | 5.25% ± 0.07 | 5.74% ± 0.12 | 0.0% |
+| Road-aware physics head | **3.101 ± 0.053** | **2.504 ± 0.051** | **1.50% ± 0.17** | **2.48% ± 0.14** | 0.0% |
+
+Off-road falls by about 70% for the most probable mode (to the coordinate head's 1.5%) and by 57% over
+all modes, every road-aware seed beats every baseline seed on both, and accuracy improves rather than
+degrades. Details and ablations are in the
 [development log](docs/development-log.md#phase-8-a-road-aware-physics-head).
 
 ```bash
@@ -114,13 +126,21 @@ curl -L --create-dirs -o weights/physics.pt \
 python src/evaluate.py --checkpoint weights/physics.pt
 ```
 
-`transformer.pt` (the coordinate head) is in the same release.
+`transformer.pt` (the coordinate head) is in the same release. The road-aware physics head (Phase 8,
+seed 0) is `physics-roadaware.pt` in the v1.1 release:
+
+```bash
+curl -L --create-dirs -o weights/physics-roadaware.pt \
+  https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/download/v1.1/physics-roadaware.pt
+python src/evaluate.py --checkpoint weights/physics-roadaware.pt
+```
 
 ### Training
 
 ```bash
 python src/train.py --config configs/transformer.yaml   # coordinate head
 python src/train.py --config configs/physics.yaml       # physics head
+python src/train.py --config configs/physics-roadaware.yaml   # road-aware physics head
 ```
 
 A full run takes about 3 h on an Apple M4. Ablation configs are in `configs/phase5/`.
@@ -138,12 +158,13 @@ python src/submit.py --checkpoint outputs/runs/physics/best.pt --split test   # 
 ## Repository structure
 
 ```text
-configs/            experiment configs (YAML); phase5/ holds the ablations
+configs/            experiment configs (YAML); phase5/ and roadaware/ hold the ablations and seeds
 src/
   download.py       dataset download from S3
   preprocess.py     raw scenarios -> agent-centric arrays
   models.py         LSTM and Transformer forecasters, coordinate and physics heads
-  physics.py        differentiable kinematic bicycle model
+  physics.py        differentiable kinematic bicycle model, initial-state correction
+  lanes.py          distance to the nearest lane centerline: lane loss and lane re-ranking
   train.py          winner-takes-all training with dev-set model selection
   evaluate.py       Argoverse 2 metrics, feasibility and off-road rates
   diagnose.py       physics-head diagnostics

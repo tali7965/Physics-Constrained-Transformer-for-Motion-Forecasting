@@ -44,8 +44,9 @@ and front page, and the pretrained weights (v1.0 release).
 Phase 7 (smooth and accurate) — complete: a 0.9 s Savitzky–Golay filter on the coordinate head
 removes its jitter with no accuracy cost; fitting the bicycle model costs accuracy (see Results).
 Phase 8 (road-aware physics head) — complete: an initial-state correction, a heading loss, a lane
-loss and lane-aware mode ranking cut the physics head's off-road share from 5.2% to 1.5% (most
-probable mode, val) and improve its accuracy (see Results).
+loss and lane-aware mode ranking cut the physics head's off-road share from 5.25% to 1.50% (most
+probable mode, val, mean of three seeds) and from 5.74% to 2.48% over all modes, while improving its
+accuracy (see Results).
 
 ## Data
 
@@ -603,7 +604,7 @@ and off by default, so every earlier config and checkpoint behaves as before.
   on dev among 30 settings: it is the setting with the lowest off-road share that does not worsen
   brier-minFDE or K=1 minFDE.
 
-**Results on val**, vehicle-like off-road and infeasibility, all focal accuracy (outputs/results/):
+**Results on val, seed 0**, vehicle-like off-road and infeasibility, all focal accuracy (outputs/results/):
 
 | Version | brier-minFDE | minFDE, K=6 | MR | minFDE, K=1 | Off-road @1 | Off-road @6 | Infeasible 10 Hz |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -618,11 +619,38 @@ and off by default, so every earlier config and checkpoint behaves as before.
 Fine-tuning the released checkpoint for 3 epochs without the changes (`configs/roadaware/ft-control.yaml`)
 leaves dev off-road at 5.3% / 6.4% (@1 / @6) against 5.2% / 6.2% before, so the gains are not from
 extra training. The road-aware runs ran for the same 30 epochs and protocol as Phase 4, on a CUDA GPU
-(A10) rather than the M4; `models.pick_device` now prefers CUDA when available. Each was trained once
-(seed 0), and Phase 5 measured a seed spread of 0.8 points in off-road @1, so the difference between
-map_weight 1 and 5 is suggestive, while the drop from 5.2% to 1.5% is far beyond it.
+(A10) rather than the M4; `models.pick_device` now prefers CUDA when available. The table above is
+seed 0; the map_weight 1 ablation was trained once, so its difference from map_weight 5 is suggestive.
 
-**Off-road @1 by the ground truth's heading change** (val, vehicle-like; classes as in Phase 5):
+**All seeds.** The road-aware head (`configs/physics-roadaware.yaml`) and the physics head were each
+trained with seeds 0, 1 and 2 (`configs/roadaware/physics-roadaware-seed{1,2}.yaml`,
+`configs/phase5/physics-seed1.yaml`, `configs/roadaware/physics-seed2.yaml`) and scored on val with
+the same script. Physics seed 0 is the released checkpoint (M4); every other run was trained on an
+A10. As a hardware check, physics seed 1 on CUDA gives 3.15 brier-minFDE and 5.3% off-road @1 against
+3.18 and 5.9% for the Phase 5 run on the M4.
+
+| Run | brier-minFDE | minFDE, K=6 | MR | minFDE, K=1 | Off-road @1 | Off-road @6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Physics head, seed 0 / 1 / 2 | 3.161 / 3.150 / 3.135 | 2.551 / 2.534 / 2.534 | 0.431 / 0.426 / 0.425 | 6.95 / 6.95 / 6.85 | 5.17 / 5.31 / 5.25% | 5.68 / 5.65 / 5.88% |
+| Road-aware head, seed 0 / 1 / 2 | 3.117 / 3.144 / 3.042 | 2.520 / 2.546 / 2.447 | 0.408 / 0.408 / 0.391 | 6.86 / 6.89 / 6.63 | 1.53 / 1.65 / 1.32% | 2.57 / 2.55 / 2.31% |
+| Physics head, mean ± std | 3.149 ± 0.013 | 2.540 ± 0.010 | 0.427 ± 0.003 | 6.92 ± 0.06 | 5.25 ± 0.07% | 5.74 ± 0.12% |
+| + lane re-ranking | 3.143 ± 0.013 | 2.540 ± 0.010 | 0.427 ± 0.003 | 6.85 ± 0.06 | 2.14 ± 0.06% | 5.74 ± 0.12% |
+| Road-aware head, no re-ranking | 3.101 ± 0.053 | 2.504 ± 0.051 | 0.402 ± 0.010 | 6.86 ± 0.14 | 3.49 ± 0.26% | 2.48 ± 0.14% |
+| **Road-aware head** (re-ranking on) | **3.101 ± 0.053** | **2.504 ± 0.051** | **0.402 ± 0.010** | **6.79 ± 0.14** | **1.50 ± 0.17%** | **2.48 ± 0.14%** |
+
+Off-road @1 by heading-change class, seed means: physics head 1.9 / 3.3 / 14.9 / 15.5% (slow /
+straight / bend / turn); road-aware head 0.4 / 1.2 / 3.8 / 3.8%. All runs are 0.00% infeasible at
+10 Hz and 2 Hz.
+
+- *The off-road gain is robust.* Every road-aware seed is below every physics seed, on @1 and @6, by
+  far more than either head's seed spread.
+- *The accuracy gain is real but smaller than the seed spread of the road-aware head.* Its seeds vary
+  more (brier-minFDE 3.04–3.14 against 3.14–3.16), so the 0.05 mean improvement is likely but not
+  certain; its worst seed (3.144) is still better than the physics head's worst (3.161).
+- *Re-ranking alone is not enough.* On the physics head it lowers off-road @1 to 2.1% but leaves the
+  modes themselves off the road (5.7% @6); the training changes are what bring @6 down.
+
+**Off-road @1 by the ground truth's heading change** (val, vehicle-like, seed 0 only; classes as in Phase 5):
 
 | Class | Scenes | Physics head | + re-ranking | Road-aware (map 5) | + re-ranking |
 | --- | --- | --- | --- | --- | --- |
