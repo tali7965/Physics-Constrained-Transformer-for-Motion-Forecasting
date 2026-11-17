@@ -233,7 +233,7 @@ def plot_predictions(a, meta, row, pred, prob, title, path):
 
 
 def main_predictions(args, meta, a):
-    from evaluate import load_checkpoint, predict  # torch only needed for this mode
+    from evaluate import load_checkpoint, predict, rerank_setting  # torch only needed for this mode
     from models import pick_device
 
     device = pick_device()
@@ -244,7 +244,7 @@ def main_predictions(args, meta, a):
     else:
         pool = split_rows(ckpt["config"]["protocol"], meta["n_scenarios"])[1] if args.split == "train" else np.arange(meta["n_scenarios"])
         rows = np.sort(np.random.default_rng(args.seed).choice(pool, size=args.random, replace=False))
-    pred, prob = predict(model, load_focal(args.split, rows, scene=True), device)
+    pred, prob = predict(model, load_focal(args.split, rows, scene=True), device, rerank=rerank_setting(ckpt["config"]))
     out_dir = PROJECT_ROOT / "outputs" / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, row in enumerate(rows):

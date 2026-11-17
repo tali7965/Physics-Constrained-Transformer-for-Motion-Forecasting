@@ -1,0 +1,38 @@
+# Phase 8 ablation: configs/physics-roadaware.yaml with a 5x weaker lane loss.
+# Road-aware physics head: identical to configs/physics.yaml plus
+#   - init_correction: the head may correct the noisy initial heading (+-11.5 deg) and speed (+-1.5 m/s)
+#   - yaw_weight: heading loss on the winning mode, so late steering learns and turns are completed
+#   - map_weight: hinge loss on every mode beyond map_margin from the nearest lane centerline
+name: physics-roadaware-map1
+
+protocol:
+  seed: 0
+  dev_size: 5000
+  subset_size: 50000
+  fraction: 1.0
+
+model:
+  type: transformer
+  d: 128
+  heads: 8
+  encoder_layers: 4
+  decoder_layers: 2
+  ffn: 512
+  dropout: 0.1
+  modes: 6
+  head: physics
+  init_correction: true
+
+train:
+  epochs: 30
+  batch_size: 64
+  lr: 3.0e-4
+  grad_clip: 1.0
+  seed: 0
+  select: brier-minFDE@6
+  yaw_weight: 3.0
+  map_weight: 1.0
+  map_margin: 2.5   # metres; 99% of vehicle-like ground-truth futures stay within 2.74 m of a centerline
+
+eval:
+  lane_rerank: [1.5, 1.0]   # run-time lane re-ranking (margin m, weight per m), chosen on dev; --no-rerank disables

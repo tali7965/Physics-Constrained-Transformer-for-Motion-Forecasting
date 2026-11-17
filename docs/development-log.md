@@ -643,10 +643,10 @@ remains in bends and turns, where an on-road mode usually exists but was not ran
   not swept.
 
 ```bash
-python src/train.py --config configs/roadaware/physics-roadaware-map5.yaml      # 30 epochs, ~70 min on an A10
-python src/train.py --config configs/roadaware/physics-roadaware.yaml           # map_weight 1
+python src/train.py --config configs/physics-roadaware.yaml      # 30 epochs, ~70 min on an A10
+python src/train.py --config configs/roadaware/physics-roadaware-map1.yaml      # ablation: map_weight 1
 python src/train.py --config configs/roadaware/ft-roadaware.yaml                # fine-tune the release, 3 epochs
-python src/evaluate.py --checkpoint outputs/runs/physics-roadaware-map5/best.pt --lane-rerank 1.5 1
+python src/evaluate.py --checkpoint outputs/runs/physics-roadaware/best.pt   # re-ranking is on by default (eval.lane_rerank)
 ```
 
 ## Report

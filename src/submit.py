@@ -23,7 +23,7 @@ from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
 
 from config import PROJECT_ROOT, load_config
 from data import load_focal, split_meta
-from evaluate import load_checkpoint, predict
+from evaluate import load_checkpoint, predict, rerank_setting
 from metrics import forecast_metrics, summarize
 from models import pick_device
 from preprocess import HISTORY, git_commit, to_global_frame
@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--split", choices=("val", "test"), default="test")
     parser.add_argument("--limit", type=int, default=None, help="only the first N scenarios")
+    parser.add_argument("--no-rerank", action="store_true", help="ignore the checkpoint's eval.lane_rerank")
     args = parser.parse_args()
 
     device = pick_device()
@@ -91,7 +92,7 @@ def main():
     n = split_meta(args.split)["n_scenarios"]
     rows = np.arange(n if args.limit is None else min(args.limit, n))
     data = load_focal(args.split, rows, scene=True)
-    pred, prob = predict(model, data, device)
+    pred, prob = predict(model, data, device, rerank=rerank_setting(ckpt["config"], off=args.no_rerank))
 
     pdir = load_config()["processed_dir"] / args.split
     scenario_ids = [str(s) for s in np.load(pdir / "scenario_id.npy", mmap_mode="r")[rows]]

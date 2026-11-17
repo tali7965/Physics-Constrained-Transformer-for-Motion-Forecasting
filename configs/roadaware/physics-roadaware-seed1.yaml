@@ -1,8 +1,9 @@
-# Road-aware physics head, trained from scratch: identical to configs/physics.yaml plus
+# Phase 8: configs/physics-roadaware.yaml with training seed 1 (same data and dev rows).
+# Road-aware physics head: identical to configs/physics.yaml plus
 #   - init_correction: the head may correct the noisy initial heading (+-11.5 deg) and speed (+-1.5 m/s)
 #   - yaw_weight: heading loss on the winning mode, so late steering learns and turns are completed
 #   - map_weight: hinge loss on every mode beyond map_margin from the nearest lane centerline
-name: physics-roadaware
+name: physics-roadaware-seed1
 
 protocol:
   seed: 0
@@ -27,8 +28,11 @@ train:
   batch_size: 64
   lr: 3.0e-4
   grad_clip: 1.0
-  seed: 0
+  seed: 1
   select: brier-minFDE@6
   yaw_weight: 3.0
-  map_weight: 1.0
+  map_weight: 5.0
   map_margin: 2.5   # metres; 99% of vehicle-like ground-truth futures stay within 2.74 m of a centerline
+
+eval:
+  lane_rerank: [1.5, 1.0]   # run-time lane re-ranking (margin m, weight per m), chosen on dev; --no-rerank disables

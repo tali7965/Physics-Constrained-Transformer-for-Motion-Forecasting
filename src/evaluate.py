@@ -65,6 +65,17 @@ def predict(model, data, device, rerank=None):
     return np.concatenate(preds), np.concatenate(probs)
 
 
+def rerank_setting(cfg, flag=None, off=False):
+    """(margin, weight) for lane re-ranking: the --lane-rerank flag if given, else the config's
+    eval.lane_rerank (road-aware configs set [1.5, 1.0]), else None; off=True disables it."""
+    if off:
+        return None
+    if flag is not None:
+        return tuple(flag)
+    setting = (cfg.get("eval") or {}).get("lane_rerank")
+    return tuple(setting) if setting else None
+
+
 def load_checkpoint(path, device):
     ckpt = torch.load(path, map_location=device)
     model = build_model(ckpt["config"]["model"]).to(device)
@@ -141,7 +152,8 @@ def main():
     which.add_argument("--checkpoint", type=Path)
     parser.add_argument("--split", choices=("val", "dev"), default="val")
     parser.add_argument("--lane-rerank", type=float, nargs=2, metavar=("MARGIN", "WEIGHT"), default=None,
-                        help="re-rank modes away from lanes, e.g. 2.5 2.0 (see lanes.rerank)")
+                        help="re-rank modes away from lanes (lanes.rerank); default: the checkpoint's eval.lane_rerank")
+    parser.add_argument("--no-rerank", action="store_true", help="ignore the checkpoint's eval.lane_rerank")
     parser.add_argument("--limit", type=int, default=None, help="score only the first N scenarios (quick checks)")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs" / "lstm.yaml",
                         help="protocol source for --split dev with a constant-velocity model")
@@ -168,9 +180,10 @@ def main():
         pred = constant_velocity(data["history"], CV_MODELS[args.model])
         pred, prob = pred[:, None], np.ones((len(pred), 1))  # unimodal
     else:
-        pred, prob = predict(model, data, device, rerank=args.lane_rerank)
-        if args.lane_rerank:
-            name += "-rerank"
+        rerank = rerank_setting(cfg, args.lane_rerank, args.no_rerank)
+        pred, prob = predict(model, data, device, rerank=rerank)
+        if rerank != rerank_setting(cfg):
+            name += f"-rerank{rerank[0]:g}-{rerank[1]:g}" if rerank else "-norerank"
 
     results = evaluate(pred, prob, data)
     results["vehicle-like"]["physical"] = physical(pred, prob, data, "train" if args.split == "dev" else "val")

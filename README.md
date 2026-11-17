@@ -67,7 +67,7 @@ one and keeps every trajectory drivable:
 | The noisy initial heading is never corrected | The head predicts a bounded correction of the initial heading (±11.5°) and speed (±1.5 m/s) per mode | `physics.correct_state`, `model.init_correction` |
 | Late steering learns slowly, so turns stay incomplete | Heading loss on the winning mode: heading depends on steering through one sum, not two | `train.yaw_weight` |
 | Drivable is not road-aware | Hinge loss on every mode beyond 2.5 m from the nearest lane centerline | `src/lanes.py`, `train.map_weight` |
-| The most probable mode may be the one that leaves the road | At run time, lower a mode's score per metre it strays beyond 1.5 m from every lane | `evaluate.py --lane-rerank 1.5 1` |
+| The most probable mode may be the one that leaves the road | At run time, lower a mode's score per metre it strays beyond 1.5 m from every lane | `eval.lane_rerank` in the config, on by default; `--no-rerank` turns it off |
 
 The lane distance uses only the lane centerlines the model already receives, so it needs no raw map
 and no new preprocessing, and the re-ranking is a legitimate run-time step. Off-road for the most
@@ -76,8 +76,8 @@ to 2.6%, while brier-minFDE improves from 3.16 to 3.12. Details and ablations ar
 [development log](docs/development-log.md#phase-8-a-road-aware-physics-head).
 
 ```bash
-python src/train.py --config configs/roadaware/physics-roadaware-map5.yaml
-python src/evaluate.py --checkpoint outputs/runs/physics-roadaware-map5/best.pt --lane-rerank 1.5 1
+python src/train.py --config configs/physics-roadaware.yaml
+python src/evaluate.py --checkpoint outputs/runs/physics-roadaware/best.pt   # re-ranking is on by default (eval.lane_rerank)
 ```
 
 ## Installation
