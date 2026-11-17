@@ -43,6 +43,9 @@ Phase 6 (analysis and write-up) — complete: the technical report, its figures,
 and front page, and the pretrained weights (v1.0 release).
 Phase 7 (smooth and accurate) — complete: a 0.9 s Savitzky–Golay filter on the coordinate head
 removes its jitter with no accuracy cost; fitting the bicycle model costs accuracy (see Results).
+Phase 8 (road-aware physics head) — complete: an initial-state correction, a heading loss, a lane
+loss and lane-aware mode ranking cut the physics head's off-road share from 5.2% to 1.5% (most
+probable mode, val) and improve its accuracy (see Results).
 
 ## Data
 
@@ -567,6 +570,83 @@ batch, and the rollout matches the CPU at 10,000.
 ```bash
 python src/smooth.py --limits
 python src/smooth.py --checkpoint outputs/runs/transformer/best.pt --split val   # ~1 h on the M4
+```
+
+### Phase 8: a road-aware physics head
+
+The Phase 5 diagnosis named three causes of the physics head's off-road excess: an initial heading it
+never corrects (straight roads), turns it does not complete because late steering gets little gradient
+(bends and turns), and no notion of where the road is. Phase 8 adds one remedy for each, all optional
+and off by default, so every earlier config and checkpoint behaves as before.
+
+- *Initial-state correction* (`model.init_correction`). `init_head` predicts, per mode, a correction of
+  the initial heading within ±0.2 rad and of the initial speed within ±1.5 m/s
+  (`physics.correct_state`). 4 cm of tracking noise in p49 − p48 is 0.4 m/s of speed and, at 5 m/s,
+  about 5° of heading. The rollout is unchanged, so every trajectory is still drivable from the
+  corrected state; the feasibility metrics stay at 0.00%. It is zero-initialised, so a checkpoint
+  without it loads and predicts exactly as before.
+- *Heading loss* (`train.yaw_weight: 3`). Mean |heading error| (rad) of the winning mode against the
+  recorded heading of vehicle-like agents moving above 1 m/s. Position is a double sum of steering, so
+  a control late in the horizon moves few, close positions; heading is a single sum, so late steering
+  gets a gradient proportional to the time left rather than its square.
+- *Lane loss* (`train.map_weight`, `train.map_margin: 2.5`). Mean metres beyond 2.5 m from the nearest
+  lane centerline, over every mode of vehicle-like agents (`src/lanes.py`). It uses the processed
+  centerlines the encoder already sees, so no new preprocessing. The nearest segment is found without
+  gradient from a lower bound (distance to the midpoint minus half the length) and the exact distance to
+  the 8 best candidates; against brute force on 3,000 val scenes it differs at 0.003% of points, by
+  at most 4.5 cm. 99% of vehicle-like ground-truth futures stay within 2.74 m of a centerline
+  (p95 2.01 m), and the mean excess beyond 2.5 m is 3 mm per point, so the hinge hardly touches real
+  driving.
+- *Lane re-ranking at run time* (`evaluate.py --lane-rerank MARGIN WEIGHT`). Each mode's logit is
+  lowered by WEIGHT per metre that its farthest point lies beyond MARGIN from every lane centerline.
+  The trajectories do not change, only which mode ranks first. MARGIN 1.5 and WEIGHT 1 were chosen
+  on dev among 30 settings: it is the setting with the lowest off-road share that does not worsen
+  brier-minFDE or K=1 minFDE.
+
+**Results on val**, vehicle-like off-road and infeasibility, all focal accuracy (outputs/results/):
+
+| Version | brier-minFDE | minFDE, K=6 | MR | minFDE, K=1 | Off-road @1 | Off-road @6 | Infeasible 10 Hz |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Physics head (Phase 4) | 3.161 | 2.551 | 0.431 | 6.952 | 5.17% | 5.68% | 0.00% |
+| + lane re-ranking only | 3.156 | 2.551 | 0.431 | 6.891 | 2.20% | 5.68% | 0.00% |
+| Fine-tuned 3 epochs with the three changes, map_weight 1 | 3.147 | 2.534 | | 6.929 | 4.86% | 4.75% | |
+| Trained from scratch, map_weight 1 | 3.138 | 2.546 | | 6.953 | 4.18% | 3.61% | |
+| Trained from scratch, map_weight 5 | **3.117** | **2.520** | **0.408** | 6.942 | 3.72% | **2.57%** | **0.00%** |
+| map_weight 5 + lane re-ranking | **3.117** | **2.520** | **0.408** | **6.862** | **1.53%** | **2.57%** | **0.00%** |
+| Coordinate head, for reference | 2.572 | 1.943 | 0.303 | 6.092 | 1.52% | | 57.8% |
+
+Fine-tuning the released checkpoint for 3 epochs without the changes (`configs/roadaware/ft-control.yaml`)
+leaves dev off-road at 5.3% / 6.4% (@1 / @6) against 5.2% / 6.2% before, so the gains are not from
+extra training. The road-aware runs ran for the same 30 epochs and protocol as Phase 4, on a CUDA GPU
+(A10) rather than the M4; `models.pick_device` now prefers CUDA when available. Each was trained once
+(seed 0), and Phase 5 measured a seed spread of 0.8 points in off-road @1, so the difference between
+map_weight 1 and 5 is suggestive, while the drop from 5.2% to 1.5% is far beyond it.
+
+**Off-road @1 by the ground truth's heading change** (val, vehicle-like; classes as in Phase 5):
+
+| Class | Scenes | Physics head | + re-ranking | Road-aware (map 5) | + re-ranking |
+| --- | --- | --- | --- | --- | --- |
+| Slow | 5,226 | 1.9% | 0.6% | 1.8% | 0.4% |
+| Straight (< 10°) | 13,505 | 3.4% | 2.0% | 2.2% | 1.3% |
+| Bend (10–30°) | 1,461 | 13.7% | 5.4% | 9.7% | 3.5% |
+| Turn (≥ 30°) | 2,921 | 15.0% | 4.3% | 11.0% | 3.9% |
+
+Training removes about a third of the straight-road and turn failures; re-ranking removes most of what
+remains in bends and turns, where an on-road mode usually exists but was not ranked first.
+
+- *The physical constraint was not the accuracy cost.* The road-aware head is more accurate than the
+  Phase 4 one on every K=6 metric, so part of the gap to the coordinate head was the uncorrected
+  initial state and the missing map signal, not the bicycle model itself. The gap is still 0.55 m
+  brier-minFDE.
+- *Map weight.* At weight 5 the lane loss ends at 8 mm of mean excess per point (16 mm at weight 1;
+  ground truth 3 mm), and accuracy improves rather than degrades, so a larger weight may help further; it was
+  not swept.
+
+```bash
+python src/train.py --config configs/roadaware/physics-roadaware-map5.yaml      # 30 epochs, ~70 min on an A10
+python src/train.py --config configs/roadaware/physics-roadaware.yaml           # map_weight 1
+python src/train.py --config configs/roadaware/ft-roadaware.yaml                # fine-tune the release, 3 epochs
+python src/evaluate.py --checkpoint outputs/runs/physics-roadaware-map5/best.pt --lane-rerank 1.5 1
 ```
 
 ## Report

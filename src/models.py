@@ -12,6 +12,8 @@ from preprocess import DT, FUTURE, HISTORY
 
 
 def pick_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 
@@ -88,19 +90,30 @@ class TransformerForecaster(nn.Module):
     control_step steps, linearly interpolated in between.
 
     use_map=False drops the lane tokens (the map ablation): the encoder sees only the agents.
+
+    init_correction=True (physics head only) adds init_head, which predicts per mode a bounded
+    correction of the initial heading and speed (physics.correct_state). It is zero-initialised, so
+    a checkpoint trained without it loads and starts from the same predictions.
+
+    After each physics-head forward pass, self.last_heading holds the rolled-out heading (B, K, 60)
+    for the heading loss in train.py.
     """
 
     POS_SCALE, VEL_SCALE = LSTMForecaster.POS_SCALE, LSTMForecaster.VEL_SCALE
     N_OBJECT_TYPES, N_LANE_TYPES = 10, 3
 
     def __init__(self, d=128, heads=8, encoder_layers=4, decoder_layers=2, ffn=512, dropout=0.1, modes=6,
-                 head="coordinate", control_step=1, use_map=True):
+                 head="coordinate", control_step=1, use_map=True, init_correction=False):
         super().__init__()
         if head not in ("coordinate", "physics"):
             raise ValueError(f"unknown head {head!r}")
         if control_step > 1 and head != "physics":
             raise ValueError("control_step applies to the physics head only")
         self.head = head
+        if init_correction and head != "physics":
+            raise ValueError("init_correction applies to the physics head only")
+        self.init_correction = init_correction
+        self.last_heading = None
         self.n_out = FUTURE // control_step + 1 if control_step > 1 else FUTURE
         if control_step > 1:
             self.register_buffer("knot_weights", physics.interpolation(control_step), persistent=False)
@@ -123,6 +136,10 @@ class TransformerForecaster(nn.Module):
         self.decoder = nn.TransformerDecoder(layer(nn.TransformerDecoderLayer), decoder_layers, norm=nn.LayerNorm(d))
         self.traj_head = mlp(d, 2 * d, self.n_out * 2)
         self.score_head = nn.Linear(d, 1)
+        if init_correction:
+            self.init_head = nn.Linear(d, 2)
+            nn.init.zeros_(self.init_head.weight)
+            nn.init.zeros_(self.init_head.bias)
         nn.init.normal_(self.time_emb, std=0.02)
 
     def encode_agents(self, agents, valid, agent_type):
@@ -155,7 +172,9 @@ class TransformerForecaster(nn.Module):
             controls = physics.bound(out)
             if self.n_out != FUTURE:
                 controls = physics.interpolate(controls, self.knot_weights)
-            traj = physics.rollout(pos, heading, speed, controls)
+            if self.init_correction:
+                heading, speed = physics.correct_state(heading, speed, self.init_head(modes))  # (B, K)
+            traj, self.last_heading = physics.rollout(pos, heading, speed, controls, return_heading=True)
         else:
             traj = out * self.POS_SCALE
         return traj, self.score_head(modes).squeeze(-1)

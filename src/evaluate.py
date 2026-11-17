@@ -29,6 +29,7 @@ from av2.map.map_api import ArgoverseStaticMap
 from matplotlib.path import Path as PolygonPath
 
 from config import PROJECT_ROOT, load_config
+import lanes
 from data import load_focal, split_meta, split_rows
 from metrics import forecast_metrics, infeasible, summarize
 from models import TransformerForecaster, build_model, constant_velocity, pick_device, scene_batch
@@ -38,8 +39,12 @@ CV_MODELS = {"cv-tracker": "tracker", "cv-displacement": "displacement"}
 
 
 @torch.no_grad()
-def predict(model, data, device):
-    """Trajectories (N, K, 60, 2) and mode probabilities (N, K); the LSTM gives K=1 with p=1."""
+def predict(model, data, device, rerank=None):
+    """Trajectories (N, K, 60, 2) and mode probabilities (N, K); the LSTM gives K=1 with p=1.
+
+    rerank=(margin, weight) lowers each mode's logit by weight per metre that its farthest point
+    lies beyond margin from every lane centerline the model sees (lanes.rerank), before the
+    softmax. Trajectories are unchanged; only which mode ranks first, and the probabilities, move."""
     model.eval()
     n = len(data["history"])
     if not isinstance(model, TransformerForecaster):
@@ -51,7 +56,10 @@ def predict(model, data, device):
         return pred, np.ones((n, 1))
     preds, probs = [], []
     for i in range(0, n, 256):
-        traj, logits = model(scene_batch(data, slice(i, i + 256), device))
+        batch = scene_batch(data, slice(i, i + 256), device)
+        traj, logits = model(batch)
+        if rerank is not None:
+            logits = lanes.rerank(logits, traj, batch["lanes"], batch["lane_type"], *rerank)
         preds.append(traj.cpu().numpy())
         probs.append(torch.softmax(logits, dim=-1).cpu().numpy())
     return np.concatenate(preds), np.concatenate(probs)
@@ -132,6 +140,9 @@ def main():
     which.add_argument("--model", choices=sorted(CV_MODELS))
     which.add_argument("--checkpoint", type=Path)
     parser.add_argument("--split", choices=("val", "dev"), default="val")
+    parser.add_argument("--lane-rerank", type=float, nargs=2, metavar=("MARGIN", "WEIGHT"), default=None,
+                        help="re-rank modes away from lanes, e.g. 2.5 2.0 (see lanes.rerank)")
+    parser.add_argument("--limit", type=int, default=None, help="score only the first N scenarios (quick checks)")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs" / "lstm.yaml",
                         help="protocol source for --split dev with a constant-velocity model")
     args = parser.parse_args()
@@ -151,13 +162,15 @@ def main():
         _, rows = split_rows(cfg["protocol"], split_meta("train")["n_scenarios"])
         data = load_focal("train", rows, scene=scene)
     else:
-        data = load_focal("val", scene=scene)
+        data = load_focal("val", np.arange(args.limit) if args.limit else None, scene=scene)
 
     if model is None:
         pred = constant_velocity(data["history"], CV_MODELS[args.model])
         pred, prob = pred[:, None], np.ones((len(pred), 1))  # unimodal
     else:
-        pred, prob = predict(model, data, device)
+        pred, prob = predict(model, data, device, rerank=args.lane_rerank)
+        if args.lane_rerank:
+            name += "-rerank"
 
     results = evaluate(pred, prob, data)
     results["vehicle-like"]["physical"] = physical(pred, prob, data, "train" if args.split == "dev" else "val")

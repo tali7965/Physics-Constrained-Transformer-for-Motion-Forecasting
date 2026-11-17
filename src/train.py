@@ -12,6 +12,15 @@ the dev metric named by train.select improves (default minADE at K=1); last.pt a
 epoch and at the end. train.eval_every (default 1) scores dev only every that many epochs and at
 the end, so runs with many short epochs are checked as often per step as full ones. With
 --overfit N the model trains and is scored on the first N training rows only.
+
+Road-awareness options for the physics head (all off by default, so older configs train as before):
+    train.yaw_weight     heading loss: mean |heading error| (rad) of the winning mode against the
+                         ground truth's recorded heading, vehicle-like agents moving > 1 m/s. Heading
+                         depends on the steering linearly rather than through a double sum, so late
+                         steering gets a usable gradient and turns are completed.
+    train.map_weight     lane loss: mean metres beyond train.map_margin (default 2.5 m) from the
+                         nearest lane centerline, every mode of vehicle-like agents (src/lanes.py).
+    train.init_from      checkpoint to start from (fine-tuning); new parameters keep their init.
 """
 
 import argparse
@@ -31,6 +40,9 @@ from evaluate import predict
 from metrics import forecast_metrics, summarize
 from models import build_model, pick_device, scene_batch
 from preprocess import git_commit
+from lanes import off_lane_penalty
+
+YAW_MIN_SPEED = 1.0  # m/s; below it the recorded heading carries no direction of travel
 
 
 def ade_loss(pred, target):
@@ -45,6 +57,23 @@ def wta_loss(traj, logits, target):
         best = (traj[:, :, -1] - target[:, None, -1]).norm(dim=-1).argmin(dim=1)
     reg = ade_loss(traj[torch.arange(len(traj), device=traj.device), best], target)
     return reg, F.cross_entropy(logits, best)
+
+
+def aux_losses(model, traj, target, batch, vehicle, tc):
+    """Heading and lane losses (see the module docstring); empty dict when both are off."""
+    out = {}
+    if tc.get("yaw_weight") and getattr(model, "last_heading", None) is not None:
+        with torch.no_grad():
+            best = (traj[:, :, -1] - target[:, None, -1, :2]).norm(dim=-1).argmin(dim=1)
+        heading = model.last_heading[torch.arange(len(traj), device=traj.device), best]  # (B, 60)
+        err = torch.remainder(heading - target[..., 4] + np.pi, 2 * np.pi) - np.pi
+        mask = (vehicle[:, None] & (target[..., 2:4].norm(dim=-1) > YAW_MIN_SPEED)).float()
+        out["yaw"] = (err.abs() * mask).sum() / mask.sum().clamp(min=1.0)
+    if tc.get("map_weight"):
+        pen = off_lane_penalty(traj, batch["lanes"], batch["lane_type"], tc.get("map_margin", 2.5))  # (B, K)
+        v = vehicle.float()[:, None]
+        out["map"] = (pen * v).sum() / (v.sum() * pen.shape[1]).clamp(min=1.0)
+    return out
 
 
 def score(model, data, device):
@@ -96,10 +125,19 @@ def main():
 
     # The LSTM's small inputs live on the device; full scenes stay in RAM and move per batch.
     y = torch.from_numpy(np.ascontiguousarray(train["target"][..., :2]))
+    y_full = torch.from_numpy(np.ascontiguousarray(train["target"]))  # with velocity and heading
+    vehicle_like = torch.from_numpy(train["vehicle_like"])
     if not multimodal:
         x = torch.from_numpy(train["history"]).to(device)
         y = y.to(device)
     model = build_model(cfg["model"]).to(device)
+    if tc.get("init_from"):
+        init = torch.load(PROJECT_ROOT / tc["init_from"], map_location=device)
+        missing, unexpected = model.load_state_dict(init["model"], strict=False)
+        if unexpected:
+            raise ValueError(f"init_from {tc['init_from']}: unexpected keys {unexpected}")
+        log.info(f"initialised from {tc['init_from']} (epoch {init['epoch']}); new parameters: {missing}")
+    weights = {"yaw": tc.get("yaw_weight", 0.0), "map": tc.get("map_weight", 0.0)}
     opt = torch.optim.Adam(model.parameters(), lr=tc["lr"])
     steps_per_epoch = -(-len(y) // tc["batch_size"])
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * steps_per_epoch)
@@ -109,7 +147,8 @@ def main():
 
     log_every = max(1, epochs // 30)
     dev_keys = ["minADE", "minFDE", "MR"] + ([f"{m}@{modes}" for m in ("minADE", "minFDE", "MR", "brier-minFDE")] if modes > 1 else [])
-    fields = ["epoch", "train_ade"] + (["train_cls"] if multimodal else []) + [f"dev_{k}" for k in dev_keys] + ["lr", "seconds"]
+    fields = (["epoch", "train_ade"] + (["train_cls"] if multimodal else []) + [f"train_{k}" for k, w in weights.items() if w]
+              + [f"dev_{k}" for k in dev_keys] + ["lr", "seconds"])
     best = float("inf")
     with open(run_dir / "metrics.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -117,14 +156,18 @@ def main():
         t0 = time.time()
         for epoch in range(1, epochs + 1):
             model.train()
-            total, total_cls, count = 0.0, 0.0, 0
+            total, total_cls, count, total_aux = 0.0, 0.0, 0, {}
             for idx in torch.randperm(len(y), generator=shuffle).split(tc["batch_size"]):
                 if multimodal:
                     i = idx.numpy()
-                    traj, logits = model(scene_batch(train, i, device))
+                    batch = scene_batch(train, i, device)
+                    traj, logits = model(batch)
                     reg, cls = wta_loss(traj, logits, y[i].to(device))
-                    loss = reg + cls
+                    aux = aux_losses(model, traj, y_full[i].to(device), batch, vehicle_like[i].to(device), tc)
+                    loss = reg + cls + sum(weights[k] * v for k, v in aux.items())
                     total_cls += cls.item() * len(idx)
+                    for k, v in aux.items():
+                        total_aux[k] = total_aux.get(k, 0.0) + v.item() * len(idx)
                 else:
                     idx = idx.to(device)
                     loss = reg = ade_loss(model(x[idx]), y[idx])
@@ -145,6 +188,8 @@ def main():
                    "lr": f"{sched.get_last_lr()[0]:.2e}", "seconds": round(time.time() - t0, 1)}
             if multimodal:
                 row["train_cls"] = round(total_cls / count, 4)
+            for k, v in total_aux.items():
+                row[f"train_{k}"] = round(v / count, 4)
             writer.writerow(row)
             f.flush()
 

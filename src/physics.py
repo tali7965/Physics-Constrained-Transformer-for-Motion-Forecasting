@@ -32,6 +32,8 @@ A_MAX = 8.0     # |acceleration|, m/s^2
 K_MAX = 0.2     # |curvature|, 1/m
 A_LAT = 6.0     # |lateral acceleration| v^2 kappa, m/s^2
 MIN_SPEED = 0.5  # m/s; below it the last-step direction is noise and the recorded heading is used
+HEADING_FIX = 0.2  # rad (11.5 deg): largest learned correction of the initial heading (init_correction)
+SPEED_FIX = 1.5    # m/s: largest learned correction of the initial speed (init_correction)
 MAX_FIT_BATCH = 2000  # fit_controls on MPS goes wrong above ~2,000 trajectories (2,500: >100 m off
                       # the CPU fit; 2,000: within 4 cm), so larger batches are fitted in chunks
 
@@ -75,11 +77,25 @@ def interpolate(knots, weights):
     return torch.einsum("tk,...kc->...tc", weights.to(knots), knots)
 
 
-def rollout(pos, heading, speed, controls, a_lat=A_LAT, k_max=K_MAX):
+def correct_state(heading, speed, raw):
+    """Initial heading and speed corrected by bounded raw offsets (..., 2).
+
+    The last-step displacement is a noisy state estimate: 4 cm of tracking noise over 0.1 s is
+    0.4 m/s of speed and, at 5 m/s, about 5 degrees of heading. The bicycle model then carries that
+    error through all 60 steps, which is the physics head's main off-road cause on straight roads.
+    Letting the network correct the estimate within +-HEADING_FIX and +-SPEED_FIX keeps every
+    trajectory drivable from the corrected state."""
+    heading = heading + HEADING_FIX * torch.tanh(raw[..., 0])
+    speed = torch.relu(speed + SPEED_FIX * torch.tanh(raw[..., 1]))
+    return heading, speed
+
+
+def rollout(pos, heading, speed, controls, a_lat=A_LAT, k_max=K_MAX, return_heading=False):
     """Integrate controls (..., 60, 2) of acceleration and steering fraction from pos (..., 2),
-    heading (...) and speed (...). Returns positions (..., 60, 2); a_lat=None drops the lateral limit."""
+    heading (...) and speed (...). Returns positions (..., 60, 2), and with return_heading=True also
+    the heading after each step (..., 60); a_lat=None drops the lateral limit."""
     x, y = pos[..., 0], pos[..., 1]
-    out = []
+    out, headings = [], []
     for k in range(FUTURE):
         accel, steer = controls[..., k, 0], controls[..., k, 1]
         new_speed = torch.relu(speed + accel * DT)
@@ -91,6 +107,9 @@ def rollout(pos, heading, speed, controls, a_lat=A_LAT, k_max=K_MAX):
         x, y = x + ds * torch.cos(mid), y + ds * torch.sin(mid)
         heading, speed = heading + kappa * ds, new_speed
         out.append(torch.stack([x, y], dim=-1))
+        headings.append(heading)
+    if return_heading:
+        return torch.stack(out, dim=-2), torch.stack(headings, dim=-1)
     return torch.stack(out, dim=-2)
 
 

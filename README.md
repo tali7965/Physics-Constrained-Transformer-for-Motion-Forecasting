@@ -30,6 +30,8 @@ measured on the most probable trajectory of vehicle-like agents.
 | Coordinate head | **2.57** | **1.94** | **0.303** | **6.09** | 57.8% / 0.0% | **1.5%** |
 | Coordinate head + 0.9 s filter | **2.57** | **1.94** | 0.304 | 6.10 | 0.9% / 0.0% | **1.5%** |
 | Physics head | 3.16 | 2.55 | 0.431 | 6.95 | **0.0% / 0.0%** | 5.2% |
+| Road-aware physics head (Phase 8) | 3.12 | 2.52 | 0.408 | 6.94 | **0.0% / 0.0%** | 3.7% |
+| Road-aware physics head + lane re-ranking | 3.12 | 2.52 | 0.408 | 6.86 | **0.0% / 0.0%** | **1.5%** |
 
 The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K = 1):
 
@@ -54,6 +56,29 @@ The gap holds across ablations (brier-minFDE at each model's own K; minFDE for K
   output cuts 10 Hz infeasibility from 58% to 0.9% with no change in accuracy. Fitting the bicycle
   model to its output instead costs accuracy, because the fit must start from the noisy current
   heading.
+
+### Road-aware physics head (Phase 8)
+
+The physics head's off-road excess had three diagnosed causes (see Findings). Phase 8 addresses each
+one and keeps every trajectory drivable:
+
+| Cause | Change | Where |
+| --- | --- | --- |
+| The noisy initial heading is never corrected | The head predicts a bounded correction of the initial heading (±11.5°) and speed (±1.5 m/s) per mode | `physics.correct_state`, `model.init_correction` |
+| Late steering learns slowly, so turns stay incomplete | Heading loss on the winning mode: heading depends on steering through one sum, not two | `train.yaw_weight` |
+| Drivable is not road-aware | Hinge loss on every mode beyond 2.5 m from the nearest lane centerline | `src/lanes.py`, `train.map_weight` |
+| The most probable mode may be the one that leaves the road | At run time, lower a mode's score per metre it strays beyond 1.5 m from every lane | `evaluate.py --lane-rerank 1.5 1` |
+
+The lane distance uses only the lane centerlines the model already receives, so it needs no raw map
+and no new preprocessing, and the re-ranking is a legitimate run-time step. Off-road for the most
+probable mode drops from 5.2% to 1.5% (the coordinate head's level), and over all six modes from 5.7%
+to 2.6%, while brier-minFDE improves from 3.16 to 3.12. Details and ablations are in the
+[development log](docs/development-log.md#phase-8-a-road-aware-physics-head).
+
+```bash
+python src/train.py --config configs/roadaware/physics-roadaware-map5.yaml
+python src/evaluate.py --checkpoint outputs/runs/physics-roadaware-map5/best.pt --lane-rerank 1.5 1
+```
 
 ## Installation
 
