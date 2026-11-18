@@ -1,0 +1,110 @@
+{
+ "name": "roadaware-seed1",
+ "checkpoint": "outputs/runs/physics-roadaware-seed1/best.pt",
+ "epoch": 28,
+ "config_name": "physics-roadaware-seed1",
+ "dev": {
+  "raw": {
+   "brier-minFDE@6": 3.175061010153757,
+   "minFDE@6": 2.57905718626554,
+   "minADE@6": 1.2417901663313808,
+   "MR@6": 0.4064,
+   "minFDE@1": 7.158081504376786,
+   "minADE@1": 2.7875206208069234,
+   "offroad@1": 0.03882657463330457,
+   "offroad@6": 0.026495542134023584,
+   "infeasible10Hz@1": 0.0,
+   "infeasible10Hz@6": 0.0,
+   "infeasible2Hz@1": 0.0,
+   "offroad@1_by_class": {
+    "slow": 0.020689655172413793,
+    "straight": 0.020497803806734993,
+    "bend": 0.09508196721311475,
+    "turn": 0.1267123287671233
+   },
+   "n_class": {
+    "slow": 1015,
+    "straight": 2732,
+    "bend": 305,
+    "turn": 584
+   }
+  },
+  "rerank": {
+   "brier-minFDE@6": 3.174114988310858,
+   "minFDE@6": 2.57905718626554,
+   "minADE@6": 1.2417901663313808,
+   "MR@6": 0.4064,
+   "minFDE@1": 7.010510305135041,
+   "minADE@1": 2.7385788567782585,
+   "offroad@1": 0.015314926660914581,
+   "offroad@6": 0.026495542134023584,
+   "infeasible10Hz@1": 0.0,
+   "infeasible10Hz@6": 0.0,
+   "infeasible2Hz@1": 0.0,
+   "offroad@1_by_class": {
+    "slow": 0.006896551724137931,
+    "straight": 0.008052708638360176,
+    "bend": 0.04262295081967213,
+    "turn": 0.04965753424657534
+   },
+   "n_class": {
+    "slow": 1015,
+    "straight": 2732,
+    "bend": 305,
+    "turn": 584
+   }
+  }
+ },
+ "val": {
+  "raw": {
+   "brier-minFDE@6": 3.143668425870601,
+   "minFDE@6": 2.545787932885988,
+   "minADE@6": 1.2501272453630339,
+   "MR@6": 0.4077157035376981,
+   "minFDE@1": 6.947004355412476,
+   "minADE@1": 2.7435191247734823,
+   "offroad@1": 0.035477869597196385,
+   "offroad@6": 0.025490705086603498,
+   "infeasible10Hz@1": 0.0,
+   "infeasible10Hz@6": 0.0,
+   "infeasible2Hz@1": 0.0,
+   "offroad@1_by_class": {
+    "slow": 0.017795637198622274,
+    "straight": 0.021399481673454276,
+    "bend": 0.09240246406570841,
+    "turn": 0.10373159876754535
+   },
+   "n_class": {
+    "slow": 5226,
+    "straight": 13505,
+    "bend": 1461,
+    "turn": 2921
+   }
+  },
+  "rerank": {
+   "brier-minFDE@6": 3.1436924894233145,
+   "minFDE@6": 2.545787932885988,
+   "minADE@6": 1.2501272453630339,
+   "MR@6": 0.4077157035376981,
+   "minFDE@1": 6.885717783459583,
+   "minADE@1": 2.7244800167168535,
+   "offroad@1": 0.016527495348937826,
+   "offroad@6": 0.025490705086603498,
+   "infeasible10Hz@1": 0.0,
+   "infeasible10Hz@6": 0.0,
+   "infeasible2Hz@1": 0.0,
+   "offroad@1_by_class": {
+    "slow": 0.004209720627631076,
+    "straight": 0.01281007034431692,
+    "bend": 0.0485968514715948,
+    "turn": 0.03971242725094146
+   },
+   "n_class": {
+    "slow": 5226,
+    "straight": 13505,
+    "bend": 1461,
+    "turn": 2921
+   }
+  }
+ }
+}

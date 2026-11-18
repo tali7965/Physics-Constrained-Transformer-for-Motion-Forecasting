@@ -687,3 +687,19 @@ of the `transformer` and `physics` runs, their val results, and the SSD for the 
 python src/figures.py                                    # report/figures/*.pdf
 cd report && latexmk -pdf report.tex                     # report/report.pdf (TeX Live)
 ```
+
+### Report revision: road-aware results
+
+The seven-page `report/report.pdf` and its LaTeX source now include the road-aware method,
+three-seed means and sample standard deviations, per-seed results, and an off-road comparison
+figure. Abstract, discussion and conclusions distinguish the original decoder-only comparison
+from the modified objective. The revised limitations disclose inspection of validation during
+lane-weight development, mixed hardware for the original seed-0 checkpoint, lack of individual
+training-component ablations, and uncertainty of the modest accuracy gain. Original diagnostic
+figures remain explicitly labeled as baseline results.
+
+`report/results/*.json` preserves the measured records; `python report/roadaware_figures.py`
+rebuilds the new tables and figure using CPU only, without model inference or retraining.
+The PDF was compiled with BibTeX and multiple pdflatex passes, then all seven pages were rendered
+and inspected for clipping, table fit and pagination; the final build has no overfull-box,
+undefined-reference or undefined-citation warnings.
