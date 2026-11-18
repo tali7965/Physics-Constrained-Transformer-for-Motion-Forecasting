@@ -210,21 +210,3 @@ This is open for anyone to pick up.
 The code is released under the [MIT License](LICENSE). Argoverse 2 data is © 2021 Argo AI, LLC,
 licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The pretrained
 weights and figures are derived from it and are for non-commercial use only.
-
-## Rebuilding the report (CPU only)
-
-The updated report includes the original controlled experiments and the three-seed road-aware
-extension. Committed records under `report/results/` reproduce the new tables and figure without
-training, loading checkpoints, or using a GPU:
-
-```bash
-python report/roadaware_figures.py
-cd report
-pdflatex -halt-on-error report.tex
-bibtex report
-pdflatex -halt-on-error report.tex
-pdflatex -halt-on-error report.tex
-```
-
-Requires NumPy, Matplotlib and TeX Live with IEEEtran (`texlive-publishers` on Debian/Ubuntu).
-The earlier gradient and trajectory figures remain baseline diagnostics, explicitly labeled in the report.
