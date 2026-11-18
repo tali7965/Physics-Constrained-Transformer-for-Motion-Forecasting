@@ -15,10 +15,15 @@ comfort-tuned model would set them tighter.
 [Pretrained weights](https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting/releases/tag/v1.0) ·
 [Development log](docs/development-log.md)
 
-![Predicted trajectories of both heads on three held-out scenes](assets/examples.gif)
+![Coordinate, original physics and road-aware physics predictions on the same three dev scenes](assets/examples.gif)
 
-*Top: coordinate head. Bottom: physics head. Panels (b) and (c) show its failure modes. Overall, its
-most probable trajectory stays on the road in about 95% of vehicle scenes.*
+*Top: coordinate head. Middle: original physics head. Bottom: road-aware physics head (seed 0,
+lane re-ranking enabled). Thick paths are the most probable modes; thin paths show the other five.
+All rows use the same scenes and plot bounds. These scenes were selected for the original-head
+diagnostics, including understeering and initial-heading errors, not as a representative sample.
+Across the full validation set and three seeds, top-mode off-road falls from 5.25% to 1.50%; the
+animation shows individual predictions, not aggregate rates. In (a), the road-aware top mode
+stays on-road but takes the wrong branch (36.3 m final error): road adherence is not intent accuracy.*
 
 ## Results
 

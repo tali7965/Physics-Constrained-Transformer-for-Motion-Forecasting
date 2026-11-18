@@ -703,3 +703,21 @@ rebuilds the new tables and figure using CPU only, without model inference or re
 The PDF was compiled with BibTeX and multiple pdflatex passes, then all seven pages were rendered
 and inspected for clipping, table fit and pagination; the final build has no overfull-box,
 undefined-reference or undefined-citation warnings.
+
+### README animation: road-aware comparison
+
+The animation now compares the coordinate, original physics and road-aware physics seed-0
+checkpoints on the same three dev scenes as the original diagnostic figure (rows 129682,
+165932, 140150). All rows share scene bounds. All six modes remain visible, with the most probable
+mode emphasized and its first off-road point marked. Road-aware ranking uses the checkpoint
+configuration, including lane re-ranking.
+
+The original-head understeer and initial-heading examples no longer leave the road in their
+road-aware top modes, but the first scene reveals an intent error: the road-aware top mode stays
+on-road while choosing the wrong branch (36.3 m FDE). The README discloses that failure and the
+baseline-conditioned scene selection; these examples are not aggregate performance estimates.
+
+`assets/examples-scenes.json` records actual model predictions, probabilities, map geometry,
+scene IDs and checkpoint hashes. The renderer can use that cache without data or model inference;
+refreshing uses CPU explicitly. No new training or GPU work was performed. The original report
+diagnostic figure remains unchanged.
