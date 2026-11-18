@@ -1,13 +1,46 @@
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
 
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage{textcomp}
+\usepackage{microtype}
 \usepackage{cite}
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{url}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage[font=footnotesize,labelfont=bf,labelsep=period,justification=justified,singlelinecheck=false]{caption}
+\usepackage{fancyhdr}
 \usepackage[hidelinks]{hyperref}
+\definecolor{reportmuted}{HTML}{66696E}
+\hypersetup{pdftitle={Drivable by Construction, Behind on Accuracy},pdfauthor={Ali Taheri},
+  pdfsubject={Road-aware kinematic decoding for Transformer motion forecasting on Argoverse 2}}
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\titleformat{\section}{\normalfont\fontsize{11}{13}\selectfont\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.55em}{}
+\titlespacing*{\section}{0pt}{11pt plus 2pt minus 1pt}{5pt}
+\titlespacing*{\subsection}{0pt}{8pt plus 1pt minus 1pt}{4pt}
+\setlength{\textfloatsep}{12pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{13pt plus 2pt minus 2pt}
+\setlength{\floatsep}{10pt plus 2pt minus 2pt}
+\setlength{\dblfloatsep}{10pt plus 2pt minus 2pt}
+\renewcommand{\arraystretch}{1.13}
+\captionsetup[table]{name=Table}
+\captionsetup[figure]{name=Figure}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\sffamily\color{reportmuted}KINEMATIC MOTION FORECASTING}
+\fancyhead[R]{\footnotesize\sffamily\color{reportmuted}Ali Taheri}
+\fancyfoot[C]{\footnotesize\color{reportmuted}\thepage}
+\renewcommand{\headrulewidth}{0.2pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{12pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\footnotesize\color{reportmuted}\thepage}\renewcommand{\headrulewidth}{0pt}}
 
 \newcommand{\repo}{\url{https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting}}
 
@@ -17,9 +50,11 @@
 A Kinematic Decoder for Transformer Motion Forecasting on Argoverse~2}
 
 \author{\IEEEauthorblockN{Ali Taheri}
-\IEEEauthorblockA{Code and configurations: \repo}}
+\IEEEauthorblockA{\href{https://github.com/tali7965/Physics-Constrained-Transformer-for-Motion-Forecasting}{Project repository and configurations}\vspace{2pt}\\
+\small Technical report\enspace\textperiodcentered\enspace18 November 2026}}
 
 \maketitle
+\thispagestyle{plain}
 
 \begin{abstract}
 We compare direct coordinate prediction with bounded-control kinematic decoding in a compact
@@ -291,11 +326,8 @@ models.
 \section{Diagnosis}
 
 The following analyses compare the original coordinate and kinematic full-data checkpoints on the
-dev set. Figures~
-ef{fig:grad} and~
-ef{fig:examples} are retained as baseline diagnostics; they do
-not depict the road-aware model introduced in Section~
-ef{sec:roadaware}.
+dev set. Figure~\ref{fig:grad} diagnoses the original heads. Figure~\ref{fig:examples}, revisited
+in Section~\ref{sec:qualitative}, adds the road-aware head on the same diagnostic scenes.
 
 \subsection{Why the kinematic head is less accurate}
 
@@ -358,21 +390,9 @@ Lateral miss $\ge 4$\,m & 295 / 516 & 9.2\% & 28.3\% \\
 \end{tabular}
 \end{table}
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=\textwidth]{figures/examples.pdf}
-\caption{Original-head dev scenes, each drawn at random from the scenes that meet its condition. Thick lines are
-the most probable modes. (a)~A turn in which both heads' most probable modes end within 2\,m (one of
-3). (b)~A turn in which the kinematic head's most probable mode turns the right way but only
-25--75\% as far, and leaves the road while the coordinate head's stays on it (one of 19).
-(c)~A straight road on which the kinematic head starts $4.1^\circ$ off the ground truth's direction
-and keeps that heading across the median (one of 21). Panels (b) and (c) show failure modes, not
-how often they occur: overall, the kinematic head's most probable mode stays on the road in about
-95\% of vehicle-like scenes (5.2\% off-road on both dev and validation).}
-\label{fig:examples}
-\end{figure*}
 
-Table~\ref{tab:offroad} and Fig.~\ref{fig:examples} locate the off-road excess.
+
+Table~\ref{tab:offroad} and the original-head rows of Fig.~\ref{fig:examples} locate the off-road excess.
 
 \textbf{Drivable is not road-aware.} The bicycle model limits how the vehicle moves, not where it may
 go: a smooth, drivable path can still cross a median. Staying on the road is learned from the map,
@@ -418,7 +438,10 @@ have zero measured 10\,Hz and 2\,Hz top-mode infeasibility.}
 \setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lcccccc}
 \toprule
-& brier-minFDE & minFDE @6 & MR @6 & minFDE @1 & Off-road @1 & Off-road @6 \\
+& \multicolumn{4}{c}{Forecast accuracy, all focal agents}
+& \multicolumn{2}{c}{Off-road (\%), vehicle-like} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-7}
+Model variant & brier-minFDE & minFDE @6 & MR @6 & minFDE @1 & Top mode & All modes \\
 \midrule
 \input{roadaware_means.tex}
 \end{tabular}
@@ -487,14 +510,15 @@ Seed & brier-minFDE & Off-road @1 & Off-road @6 \\
 \end{tabular}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/roadaware.pdf}
-\caption{Road-aware extension: bars are seed means; markers show the three training seeds.
-``Trained'' adds state correction, heading and lane losses; ``+ rank'' applies prediction-time
-lane re-ranking. Only training changes can improve the all-six-mode rate.}
+\includegraphics[width=\textwidth]{figures/roadaware.pdf}
+\caption{Road-aware extension on validation. Open circles are individual training seeds; diamonds
+and horizontal whiskers are means and sample standard deviations. Values at right give seed means.
+Ranking changes only mode probabilities, so it improves the most probable trajectory but cannot
+change the off-road share across all six modes. Lower is better.}
 \label{fig:roadaware}
-\end{figure}
+\end{figure*}
 
 We train the original and road-aware kinematic heads with seeds 0, 1 and 2 and score all checkpoints
 with the same evaluation code (Tables~\ref{tab:roadmeans} and~\ref{tab:roadseeds}). The original
@@ -527,6 +551,43 @@ seed 0 gives brier-minFDE 3.138 and raw off-road 4.18 / 3.61\% (@1 / @6). At wei
 3.117 and 3.72 / 2.57\%. This single-seed comparison supports the stronger penalty but does not
 isolate the state and heading contributions. Validation was inspected during this comparison;
 therefore the final configuration is not an untouched validation-only confirmation.
+
+
+\subsection{Qualitative before-and-after comparison}
+\label{sec:qualitative}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/roadaware_examples.pdf}
+\caption{The same three dev scenes, compared across the coordinate, original kinematic and
+road-aware kinematic heads (seed 0, ranking enabled). Rows share scene bounds; all six modes are
+shown. Labels give final displacement error (FDE) for the most probable mode. In (b) and (c),
+the original head leaves the road while the road-aware top mode stays inside the drivable area.
+In (a), however, the road-aware top mode chooses the wrong branch and ends 36.3\,m from the
+recorded future despite remaining on-road. These baseline-selected diagnostic scenes illustrate
+behaviour, not population rates.}
+\label{fig:examples}
+\end{figure*}
+
+Figure~\ref{fig:examples} extends the original diagnostic examples without changing their identities.
+The scenes were selected from the fixed dev split using only the original coordinate and kinematic
+checkpoints: (a) a turn where both original top modes end within 2\,m (one of three qualifying
+scenes), (b) an understeering, off-road original kinematic mode while the coordinate mode remains
+on-road (one of 19), and (c) a straight-road case with a $4.1^\circ$ initial-heading error and the
+same off-road contrast (one of 21). One scene per condition was drawn with random seed 0. The
+road-aware predictions did not influence that selection.
+
+The comparison supports a narrower claim than ``the fix makes every prediction better.'' In (b),
+the road-aware top mode remains on-road and reduces FDE from 19.2 to 6.8\,m; in (c), it reduces FDE
+from 10.0 to 2.7\,m and avoids the original crossing. Neither example establishes accurate intent:
+the (b) error still exceeds the 2\,m miss threshold. In (a), the new top mode remains on-road but
+its FDE increases from 1.8 to 36.3\,m. Lane adherence does not determine which branch an agent
+will take. The full-validation results, not these selected examples, quantify aggregate gains.
+
+The static panels and the repository animation share the recorded trajectories, probabilities and
+scene geometry in \texttt{assets/examples-scenes.json}. Checkpoint hashes identify the exact
+models. No retraining was needed for this qualitative update, and the original gradient analysis
+has not been repeated for the road-aware checkpoint.
 
 \section{Discussion and Limitations}
 
@@ -584,8 +645,9 @@ weight; some auxiliary distance checks also use validation scenes. Individual st
 heading-loss ablations were not run, so gains cannot be causally assigned to each component.
 Centreline distance is not drivable-area membership, especially in intersections and non-lane
 areas. The eight-candidate distance is approximate, and probability recalibration by re-ranking is
-not assessed beyond brier-minFDE. Existing gradient and qualitative figures diagnose the original
-heads; updated road-aware trajectories and gradient plots were not generated for this revision.
+not assessed beyond brier-minFDE. The gradient figure diagnoses only the original heads. The updated qualitative comparison
+includes the road-aware checkpoint, but its three baseline-selected dev scenes are not a random
+sample of validation and cannot estimate performance frequencies.
 
 \section{Conclusion}
 
@@ -599,7 +661,13 @@ held-out evaluation are needed to establish that smaller gain. A light filter re
 way to remove the coordinate decoder's jitter when hard per-trajectory kinematic restrictions are
 not required.
 
+\begingroup
+\IEEEtriggeratref{10}
+\raggedright
+\interlinepenalty=10000
+\setlength{\emergencystretch}{1em}
 \bibliographystyle{IEEEtran}
 \bibliography{references}
+\endgroup
 
 \end{document}

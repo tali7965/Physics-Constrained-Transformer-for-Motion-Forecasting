@@ -721,3 +721,21 @@ baseline-conditioned scene selection; these examples are not aggregate performan
 scene IDs and checkpoint hashes. The renderer can use that cache without data or model inference;
 refreshing uses CPU explicitly. No new training or GPU work was performed. The original report
 diagnostic figure remains unchanged.
+
+### Report refresh: qualitative comparison and presentation
+
+The revised eight-page report incorporates the same three-scene before-and-after comparison as
+the updated README animation. Vector panels show all three heads with shared scene bounds,
+per-panel top-mode FDE, all six modes and first-off-road markers. The discussion retains the
+wrong-branch road-aware failure and makes explicit that on-road prediction is not intent accuracy.
+The baseline-conditioned dev selection and all uncertainty/validation-tuning caveats remain.
+
+Presentation now uses coherent Times-family text/math with microtypography, left-aligned numbered
+headings, restrained running headers and page numbers, grouped table headings and readable captions.
+The quantitative road-adherence figure is a full-width seed/mean/standard-deviation plot rather
+than a compact bar chart. Bibliography entries are kept intact across the final two columns.
+All eight pages were rendered and visually inspected; extracted text and bounds were checked.
+The final build has no unresolved references/citations or overfull boxes. A malformed historical
+cross-reference fragment was also corrected. Measurements and checkpoints are unchanged, and
+all updated figures use committed result records and cached trajectories, with no inference,
+training, dataset access or GPU compute needed for this refresh.

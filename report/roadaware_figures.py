@@ -37,25 +37,5 @@ for s in range(3):
     lines.append(" & ".join(cells) + r" \\")
 (ROOT / "roadaware_seeds.tex").write_text("\n".join(lines) + "\n" + r"\bottomrule" + "\n")
 
-plt.rcParams.update({"font.family":"serif", "font.serif":["Liberation Serif","DejaVu Serif"],
-    "font.size":8, "axes.labelsize":8, "xtick.labelsize":7, "ytick.labelsize":7,
-    "pdf.fonttype":42, "axes.spines.top":False,"axes.spines.right":False})
-fig, axes = plt.subplots(1,2,figsize=(3.5,2.15),sharey=True)
-colors=["#5c5c62","#8d8d92","#edab8d","#d65d2e"]
-labels=["Original","+ rank","Trained","+ rank"]
-for ax,key,title in zip(axes,["offroad@1","offroad@6"],["Most probable mode","All six modes"]):
-    for j,(_,prefix,tag) in enumerate(GROUPS):
-        y=100*values(prefix,tag,key)
-        ax.bar(j,y.mean(),color=colors[j],width=.64,alpha=.88,zorder=2)
-        ax.scatter(j+np.array([-.12,0,.12]), y, s=10,facecolor="white",edgecolor="#26262b",linewidth=.65,zorder=3)
-    ax.set_xticks(range(4), labels, rotation=45, ha="right")
-    ax.set_title(title,fontsize=8)
-    ax.set_ylim(0,6.6); ax.set_yticks([0,2,4,6])
-    ax.yaxis.grid(True,color="#dedee1",linewidth=.5,zorder=0)
-    ax.set_axisbelow(True)
-axes[0].set_ylabel("Off-road trajectories (%)")
-fig.tight_layout(w_pad=.7,pad=.5)
-(ROOT/"figures").mkdir(exist_ok=True)
-fig.savefig(ROOT/"figures/roadaware.pdf",bbox_inches="tight",pad_inches=.02)
-plt.close(fig)
-print("Generated roadaware_means.tex, roadaware_seeds.tex, figures/roadaware.pdf from stored seed results.")
+from presentation_figures import build_figures
+build_figures()
